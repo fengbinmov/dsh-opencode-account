@@ -49,8 +49,11 @@
   },
   "files": [
     "lib",
+    "src",
+    "scripts",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "test-*.mjs"
   ],
   "engines": {
     "node": ">=22"

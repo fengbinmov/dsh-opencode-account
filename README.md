@@ -4,6 +4,12 @@
 并在 **设置 → OpenCode** 里显示账户页——配额窗口、Console 消费报表、各模型额度换算、实时模型目录。
 页面形态与 `@mars-sea/dsh-commandcode-provider` 的设置页一致（同一套 `cc-` 风格行、同款配额条、同样的浮动保存条）。
 
+## 界面预览
+
+![设置 → OpenCode：账户、用量配额、消费报表与模型目录](src/yulantu.png)
+
+## 仓库结构
+
 ```
 F:\Code\Ai\Opencode Provider\
 ├─ package.json          插件清单（dsh.bundle + dsh.client）
