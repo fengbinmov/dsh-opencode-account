@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 
 /** js-yaml lives in the profile's tree, not in this checkout. */
-function loadYaml(source) {
+function loadJsYaml() {
 	const candidates = [
 		join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh', 'profiles', 'web', 'node_modules', 'js-yaml', 'index.js'),
 		join(process.env.APPDATA ?? '', 'npm', 'node_modules', 'js-yaml', 'index.js'),
@@ -43,12 +43,23 @@ function loadYaml(source) {
 	for (const candidate of candidates) {
 		try {
 			const loaded = require(candidate);
-			return (loaded.default ?? loaded).load(source);
+			return loaded.default ?? loaded;
 		} catch {
 			// Try the next candidate.
 		}
 	}
 	throw new Error('js-yaml not found; install the plugin profile first');
+}
+
+const jsYaml = loadJsYaml();
+
+function loadYaml(source) {
+	return jsYaml.load(source);
+}
+
+/** Serialize back to YAML; `lineWidth: -1` keeps long model rows on one line. */
+function dumpYaml(value) {
+	return jsYaml.dump(value, { lineWidth: -1, noRefs: true, quotingType: '"' });
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -593,6 +604,19 @@ const settingsBlock = ['llm-pi-ai:', '  providers:', ...generatedBlock.split('\n
 	'\n',
 );
 
+/**
+ * Merge the OpenCode Go routes into `$DSH_HOME/settings.yaml`.
+ *
+ * This document wins over the plugin's bundle layer, so the routes have to be
+ * stated here too or a Models-page save (which writes here) would drop them.
+ *
+ * It MERGES rather than replaces. The first version threw away everything from
+ * `llm-pi-ai:` to the next top-level key — which on anyone else's machine means
+ * deleting the providers they already configured (this is a plugin other people
+ * install, not a private one). Now only the three route keys this plugin owns
+ * are written; every other provider, and the rest of the document, is preserved
+ * verbatim.
+ */
 function syncSettings() {
 	let current;
 	try {
@@ -603,10 +627,40 @@ function syncSettings() {
 	}
 	const lines = current.split('\n');
 	const start = lines.findIndex((line) => line === 'llm-pi-ai:');
+
+	// The section runs to the next top-level key (or EOF).
+	let end = lines.length;
+	if (start !== -1) {
+		for (let index = start + 1; index < lines.length; index += 1) {
+			const line = lines[index];
+			if (line.trim().length > 0 && !/^\s/.test(line)) {
+				end = index;
+				break;
+			}
+		}
+	}
+
 	const head = (start === -1 ? lines : lines.slice(0, start)).join('\n').replace(/\s*$/, '');
+	const tail = start === -1 ? '' : lines.slice(end).join('\n').replace(/^\s*\n/, '').replace(/\s*$/, '');
+
+	// Providers already configured here, minus the ones this plugin owns.
+	const existingSection = start === -1 ? undefined : loadYaml(lines.slice(start, end).join('\n'));
+	const existingProviders = existingSection?.['llm-pi-ai']?.providers ?? {};
+	const mine = loadYaml(settingsBlock)['llm-pi-ai'].providers;
+	const kept = Object.fromEntries(Object.entries(existingProviders).filter(([key]) => !(key in mine)));
+	if (Object.keys(kept).length > 0) {
+		console.log(`  keeping ${Object.keys(kept).length} unrelated provider(s): ${Object.keys(kept).join(', ')}`);
+	}
+
+	const merged = {
+		...(existingSection?.['llm-pi-ai'] ?? {}),
+		providers: { ...kept, ...mine },
+	};
+	const block = dumpYaml({ 'llm-pi-ai': merged });
 	const updated =
 		`${head}\n\n# OpenCode Go routes (dsh-opencode-account). Stated here as well as in the\n` +
-		`# plugin bundle layer because a Models-page save rewrites THIS document.\n${settingsBlock}\n`;
+		`# plugin bundle layer because a Models-page save rewrites THIS document.\n` +
+		`# Regenerate with: node scripts/build-provider-models.mjs\n${block}${tail === '' ? '' : `\n${tail}\n`}`;
 	if (updated === current) return;
 	writeFileSync(settingsPath, updated);
 	console.log(`updated ${settingsPath}`);

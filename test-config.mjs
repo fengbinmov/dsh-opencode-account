@@ -70,10 +70,14 @@ console.log(`routes in cordis.patch.yml: ${routes.join(', ')}`);
 
 /** Capture the adapter the plugin registers, by driving its real `apply()`. */
 let adapter;
+let directory;
 plugin.apply(
 	{
 		llm: {
-			registerConfigurableProviders: () => ({ replace() {}, dispose() {} }),
+			registerConfigurableProviders: (rows) => {
+				directory = rows;
+				return { replace() {}, dispose() {} };
+			},
 			registerModelDiscovery: () => {},
 			registerAdapter: (_routes, instance) => {
 				adapter = instance;
@@ -92,6 +96,28 @@ plugin.apply(
 	section,
 );
 if (adapter === undefined) throw new Error('the plugin registered no adapter — dsh would serve no route');
+
+// The provider rows the Models page renders. They must come from this config
+// alone: that is what makes the plugin usable on a machine that never edited
+// settings.yaml — install it, set the API key, and the routes are there.
+const configuredRoutes = Object.keys(section.providers);
+const rows = (directory ?? []).filter((row) => configuredRoutes.includes(row.provider));
+console.log(`models-page rows from this config: ${rows.length}`);
+for (const row of rows) {
+	console.log(`  ${row.provider.padEnd(24)} "${row.displayName}"`);
+}
+if (rows.length !== configuredRoutes.length) {
+	const listed = new Set(rows.map((row) => row.provider));
+	throw new Error(`routes missing from the Models page: ${configuredRoutes.filter((r) => !listed.has(r)).join(', ')}`);
+}
+for (const row of rows) {
+	if (typeof row.displayName !== 'string' || row.displayName.length === 0) {
+		throw new Error(`${row.provider}: the Models row has no display name`);
+	}
+	if ((row.settingsPath ?? []).join('.') !== `providers.${row.provider}`) {
+		throw new Error(`${row.provider}: unexpected settings path ${(row.settingsPath ?? []).join('.')}`);
+	}
+}
 
 const declared = Object.entries(section.providers).flatMap(([route, profile]) =>
 	(profile.models ?? []).map((model) => ({ route, id: model.id, input: model.input })),

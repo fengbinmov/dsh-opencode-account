@@ -389,12 +389,17 @@
       name: "dsh-opencode-account"
       config:
         apiKeyEnv: OPENCODE_API_KEY
-        # Subscription tier: the public API does not expose it, so it is a
-        # deployment fact. `go` or `go-plus`; leave unset to stay tier-agnostic.
-        plan: go-plus
+        # No `plan:` on purpose — the tier is read from `/api/go/status`
+        # (`product: "go" | "go-plus"`), so this file stays correct for a Go
+        # subscriber as well as a Go Plus one. Set `plan:` here only for a key
+        # that cannot read that endpoint; leaving it out shows "tier not
+        # labelled" rather than somebody else's tier.
         baseURL: https://opencode.ai/zen/go/v1
         consoleURL: https://opencode.ai/console
         usageRange: 30d
         provider: opencode-go
+        # The gateway wants a STABLE session id, not a unique one, so one shared
+        # value works everywhere. If several machines use this key, give each its
+        # own UUID (any v4 value) to keep their prompt caches apart.
         session: 7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40
         timeoutMs: 20000

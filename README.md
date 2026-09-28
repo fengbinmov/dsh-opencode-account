@@ -319,7 +319,7 @@ pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位�
 **这就是"页面与控制台不一致"的根因** —— 轻度使用时 `/usage` 永远是 0，而控制台显示 0.7%。
 现在页面直接用 `go/status` 的金额与百分比，`/usage` 只在读不到 `go/status` 时兜底。
 
-**档位也不需要你手填**：`go/status` 返回 `product: "go-plus"`，页面自动标注并写明来源；
+**档位也不需要你手填**：`go/status` 返回 `product`（`"go"` 或 `"go-plus"`），页面自动标注并写明来源；
 配置里的 `plan` 只对读不到该接口的密钥生效。
 
 **没有余额端点，这不是本插件的取舍**：
@@ -372,15 +372,17 @@ refs:
 
 ### 2. 装进 profile
 
+把 `<插件目录>` 换成你放这份代码的位置（路径含空格要加引号）：
+
 ```sh
-dsh plugin --profile web add "F:/Code/Ai/Opencode Provider"
+dsh plugin --profile web add "<插件目录>"
 ```
 
-或在 `$DSH_HOME/profiles/web/package.json` 里写依赖，并把包名加进 `dsh.profile.bundles`：
+或手工两步 —— 在 `$DSH_HOME/profiles/web/package.json` 里写依赖，并把包名加进 `dsh.profile.bundles`：
 
 ```json
 {
-  "dependencies": { "dsh-opencode-account": "file:F:/Code/Ai/Opencode Provider" },
+  "dependencies": { "dsh-opencode-account": "file:<插件目录>" },
   "dsh": { "profile": { "bundles": ["…", "dsh-opencode-account"] } }
 }
 ```
@@ -388,6 +390,28 @@ dsh plugin --profile web add "F:/Code/Ai/Opencode Provider"
 然后 `cd "$DSH_HOME/profiles/web" && pnpm install`，**重启 dsh**。
 
 装完在 **设置 → OpenCode** 就能看到页面；**设置 → Models** 里会出现三条 OpenCode Go 路由。
+
+### 3. 在别的设备 / 给别人用
+
+这个插件不绑定某台机器或某个账号，**装好 + 配好 `OPENCODE_API_KEY` 即可**：
+
+| 需要改的 | 说明 |
+|---|---|
+| `OPENCODE_API_KEY` | **唯一必需项**。每台设备填自己的 key（可以是同一个 key，也可以是不同账号的） |
+| 模型提供方 | **不用配**。三条 OpenCode Go 路由随插件的 bundle 层提供，装完即出现在 **设置 → Models**（`test-config.mjs` 断言了这三个条目及其显示名） |
+| 档位 | **不用配**。页面从 `/api/go/status` 读 `product`，Go 与 Go Plus 都会自动认对 |
+| `session` | 默认值可直接用。同一把 key 跑在多台机器上时，建议各给一个 UUID v4，让 prompt 缓存互不干扰 |
+| 模型清单 | 已随包提供（`cordis.patch.yml` + `model-metadata.json`）。想按当时的网关重新对齐就 `node scripts/build-provider-models.mjs` |
+
+两条已实测的保证：
+
+- **新机器**（`settings.yaml` 里完全没有 `llm-pi-ai` 段）→ 仅靠插件的 bundle 层就能对话，实测返回 `NEWUSER-OK`；
+- **已有别的 pi-ai provider 的机器** → 层叠是**逐键合并**而非整段替换：你的 `acme-gateway` 与三条 OpenCode Go 路由共存，实测返回 `LAYER-OK`。
+
+> **你已有的 `llm-pi-ai` 配置不会被覆盖**。`settings.yaml` 的优先级高于插件的 bundle 层，
+> 所以脚本会把三条 OpenCode Go 路由**合并**进你的 `providers`，其余 provider 与文件其他部分
+> 原样保留（跑的时候会打印 `keeping N unrelated provider(s)`）。
+> 这一点是刻意修的：早期版本会从 `llm-pi-ai:` 一直删到下一个顶层键，等于抹掉别人的配置。
 
 ## 五、验证
 
@@ -423,7 +447,7 @@ dsh --profile octest --patch "./.dsh-test/model-overlay.yml" "reply with exactly
 
 已验证的事实（本机实测）：
 
-- `GET http://127.0.0.1:3099/opencode/account` → 200，真实账号 `fengbinmov@outlook.com`、30 个模型、30/30 命中额度表、预算报表 1 行；
+- `GET http://127.0.0.1:3099/opencode/account` → 200，返回真实账号（形如 `user@example.com`）、30 个模型、30/30 命中额度表、预算报表 1 行；
 - `--dump-config` 显示插件层 patch 了 `@deepseek-ai/dsh-base` 的 `llm-pi-ai` 行，`providers.opencode-go` 带着 `x-opencode-session`；
 - 客户端 bundle 已随启动 payload 下发（含 `id: 'dsh-opencode-account'`）。
 
