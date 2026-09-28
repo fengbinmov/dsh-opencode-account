@@ -16,23 +16,39 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
+/**
+ * Where dsh's own modules live. Windows' npm prefix was the original single
+ * shape; a dsh profile's hoisted `node_modules` and the Homebrew/system npm
+ * prefixes hold the same packages on macOS and Linux. `DSH_NODE_MODULES`
+ * overrides the search when a machine keeps them elsewhere.
+ */
+function dshModuleRoots() {
+	const home = process.env.HOME ?? process.env.USERPROFILE ?? '';
+	const appData = process.env.APPDATA ?? '';
+	return [
+		process.env.DSH_NODE_MODULES,
+		home === '' ? undefined : join(home, '.dsh', 'profiles', 'node_modules'),
+		home === '' ? undefined : join(home, '.dsh', 'profiles', 'web', 'node_modules'),
+		appData === '' ? undefined : join(appData, 'npm', 'node_modules'),
+		appData === '' ? undefined : join(appData, 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules'),
+		'/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules',
+		'/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules',
+	].filter((root) => root !== undefined && root !== '');
+}
+
 /** js-yaml ships in the dsh profile; nothing in this repo depends on it. */
 function loadYaml(source) {
-	const candidates = [
-		join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh', 'profiles', 'web', 'node_modules', 'js-yaml', 'index.js'),
-		join(process.env.APPDATA ?? '', 'npm', 'node_modules', 'js-yaml', 'index.js'),
-	];
-	for (const candidate of candidates) {
+	for (const root of dshModuleRoots()) {
 		try {
-			const loaded = require(candidate);
+			const loaded = require(join(root, 'js-yaml', 'index.js'));
 			return (loaded.default ?? loaded).load(source);
 		} catch {
-			// next candidate
+			// next root
 		}
 	}
 	throw new Error('js-yaml not found; install the plugin into a dsh profile first');
@@ -40,13 +56,9 @@ function loadYaml(source) {
 
 /** dsh's own pi-ai adapter, from wherever dsh is installed. */
 async function loadPlugin() {
-	const roots = [
-		join(process.env.APPDATA ?? '', 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai'),
-		join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh', 'profiles', 'node_modules', '@deepseek-ai'),
-	];
-	for (const root of roots) {
+	for (const root of dshModuleRoots()) {
 		try {
-			return await import(`file://${join(root, 'dsh-llm-pi-ai', 'lib', 'index.js').replace(/\\/g, '/')}`);
+			return await import(pathToFileURL(join(root, '@deepseek-ai', 'dsh-llm-pi-ai', 'lib', 'index.js')).href);
 		} catch {
 			// next root
 		}
@@ -68,11 +80,21 @@ if (section?.providers === undefined) throw new Error('cordis.patch.yml declares
 const routes = Object.keys(section.providers);
 console.log(`routes in cordis.patch.yml: ${routes.join(', ')}`);
 
+// `apply()` receives what dsh's loader hands it: the config validated through
+// the plugin's own schema (each node a Schema with `.get()`), plus the fiber
+// that names the settings namespace. The raw YAML object above stays the source
+// of the assertions; it is not a valid plugin input on its own.
+const validated = plugin.Config['~standard'].validate(section);
+if (validated.issues !== undefined) {
+	throw new Error(`dsh rejects the shipped config: ${JSON.stringify(validated.issues)}`);
+}
+
 /** Capture the adapter the plugin registers, by driving its real `apply()`. */
 let adapter;
 let directory;
 plugin.apply(
 	{
+		fiber: { entry: { options: { id: 'llm-pi-ai' } } },
 		llm: {
 			registerConfigurableProviders: (rows) => {
 				directory = rows;
@@ -90,10 +112,10 @@ plugin.apply(
 		effect: () => {},
 		inject: (names, callback) => {
 			if (!names.includes('settings')) return;
-			callback({ settings: { installSection: () => {} }, effect: () => {} });
+			callback({ settings: { configure: () => {}, installSection: () => {} }, effect: () => {} });
 		},
 	},
-	section,
+	validated.value,
 );
 if (adapter === undefined) throw new Error('the plugin registered no adapter — dsh would serve no route');
 

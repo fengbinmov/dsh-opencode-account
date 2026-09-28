@@ -12,24 +12,41 @@
 // No network: pi-ai's own API layer is driven with a stub `fetch`, and the body
 // it builds is what this file inspects. That is the same path dsh uses
 // (`streamSimple`, which performs the reasoning → reasoningEffort conversion).
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const DSH = join(
-	process.env.APPDATA ?? '',
-	'npm',
-	'node_modules',
-	'@deepseek-ai',
-	'dsh',
-	'node_modules',
-);
-const piAi = join(DSH, '@earendil-works', 'pi-ai', 'dist');
+/**
+ * Where dsh's own dependencies live. The Windows npm prefix is no longer the
+ * only install shape: a dsh profile's hoisted `node_modules` and the Homebrew
+ * (Apple Silicon / Intel) and system prefixes all hold one. `DSH_NODE_MODULES`
+ * wins when a machine keeps them somewhere else.
+ */
+function dshDependencyRoots() {
+	const home = process.env.HOME ?? process.env.USERPROFILE ?? '';
+	const appData = process.env.APPDATA ?? '';
+	return [
+		process.env.DSH_NODE_MODULES,
+		home === '' ? undefined : join(home, '.dsh', 'profiles', 'node_modules'),
+		appData === '' ? undefined : join(appData, 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules'),
+		'/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules',
+		'/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules',
+	].filter((root) => root !== undefined && root !== '');
+}
+
+const piAiRoot = dshDependencyRoots()
+	.map((root) => join(root, '@earendil-works', 'pi-ai', 'dist'))
+	.find((candidate) => existsSync(join(candidate, 'providers', 'data', 'opencode-go.json')));
+if (piAiRoot === undefined) {
+	console.log('skipped: pi-ai not found (install dsh or set DSH_NODE_MODULES)');
+	process.exit(0);
+}
 
 const { openAICompletionsApi } = await import(
-	`file://${join(piAi, 'api', 'openai-completions.lazy.js').replace(/\\/g, '/')}`
+	pathToFileURL(join(piAiRoot, 'api', 'openai-completions.lazy.js')).href
 );
 const catalog = JSON.parse(
-	readFileSync(join(piAi, 'providers', 'data', 'opencode-go.json'), 'utf8'),
+	readFileSync(join(piAiRoot, 'providers', 'data', 'opencode-go.json'), 'utf8'),
 );
 
 /** One catalog model, as the adapter hands it to pi-ai. */

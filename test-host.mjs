@@ -107,7 +107,17 @@ if (offline) {
 		const window = windows[id];
 		if (window === undefined) throw new Error(`live: window ${id} missing`);
 		if (typeof window.percent !== 'number') throw new Error(`live: window ${id} should carry a numeric percent`);
-		if (typeof window.resetsAt !== 'string') throw new Error(`live: window ${id} should carry resetsAt`);
+		// The 5-hour meter carries no reset point until the account spends in it:
+		// `/api/go/status` answers `resetsAt: null` for a fresh window and the
+		// plugin normalizes that to undefined. The windows upstream always dates
+		// must still carry one, and a rolling one must not be malformed.
+		if (id === 'rolling') {
+			if (window.resetsAt !== undefined && typeof window.resetsAt !== 'string') {
+				throw new Error(`live: window rolling resetsAt must be a string when present, got ${JSON.stringify(window.resetsAt)}`);
+			}
+		} else if (typeof window.resetsAt !== 'string') {
+			throw new Error(`live: window ${id} should carry resetsAt`);
+		}
 	}
 	// The quota card must be the PRECISE surface. The gateway's `/usage` rounds its
 	// percentage to a whole number, so a real 0.7% arrives as `0` — the very

@@ -27,7 +27,7 @@
  * So a subscription whose models span three wire protocols needs one route per
  * protocol, and every route is a slice of the same gateway catalog.
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -680,12 +680,16 @@ if (check) {
 	const actualBlock = marker.exec(source)?.[0];
 	const blockStale = actualBlock !== generatedBlock;
 	const declared = declaredIds(patchPath);
-	const settingsDeclared = declaredIds(settingsPath);
+	// `syncSettings()` skips a missing document, so the check must not demand one:
+	// a machine that never ran the sync has only the bundle layer to compare.
+	const settingsExists = existsSync(settingsPath);
+	const settingsDeclared = settingsExists ? declaredIds(settingsPath) : undefined;
 	const same =
 		declared.length === ids.length &&
 		declared.every((id, index) => id === ids[index]) &&
-		settingsDeclared.length === ids.length &&
-		settingsDeclared.every((id, index) => id === ids[index]);
+		(settingsDeclared === undefined ||
+			settingsDeclared.length === ids.length &&
+			settingsDeclared.every((id, index) => id === ids[index]));
 	if (blockStale || !same) {
 		if (blockStale) {
 			const actualInputs = new Map(
@@ -703,13 +707,16 @@ if (check) {
 		}
 		if (!same) {
 			console.error(
-				`declared patch=${declared.length} settings=${settingsDeclared.length}, gateway serves ${ids.length}`,
+				settingsDeclared === undefined
+					? `declared patch=${declared.length}, gateway serves ${ids.length} (no ${settingsPath} to compare)`
+					: `declared patch=${declared.length} settings=${settingsDeclared.length}, gateway serves ${ids.length}`,
 			);
 		}
 		console.error('run: node scripts/build-provider-models.mjs');
 		process.exit(1);
 	}
 	console.log(`provider catalog matches the gateway (${ids.length} models over ${grouped.length} routes)`);
+	if (settingsDeclared === undefined) console.log(`note: ${settingsPath} not found — user layer not checked`);
 } else {
 	writeFileSync(patchPath, next);
 	syncSettings();
