@@ -140,6 +140,22 @@ if (offline) {
 		if (model.allowance < 0) throw new Error(`live: ${model.id} allowance must not be negative`);
 	}
 
+	// Capabilities ride along from models.dev. The page shows them precisely
+	// because dsh can only declare text/image, so pdf/audio/video would otherwise
+	// be invisible; none arriving means the metadata file is missing from the
+	// install (a packaging bug, not an upstream one).
+	const withCapabilities = payload.models.filter((model) => model.capabilities !== undefined);
+	if (withCapabilities.length === 0) {
+		throw new Error('live: no model carried capabilities — is model-metadata.json installed?');
+	}
+	const beyondDeclarable = withCapabilities.filter((model) =>
+		(model.capabilities.input ?? []).some((modality) => modality !== 'text' && modality !== 'image'),
+	);
+	console.log(
+		`live capabilities: ${withCapabilities.length}/${payload.models.length} models carry them; ` +
+			`${beyondDeclarable.length} use modalities dsh cannot declare itself`,
+	);
+
 	console.log(
 		`live payload ok: identity=${payload.identity.email ?? payload.identity.userId} ` +
 			`windows=${Object.entries(windows)

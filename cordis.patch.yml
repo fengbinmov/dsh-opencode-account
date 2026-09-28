@@ -40,7 +40,7 @@
           name: DeepSeek Flash
           contextWindow: 1000000
           maxTokens: 131072
-          input: ['text']
+          input: ['text', 'image']
           reasoningEfforts:
             off:
             low: low
@@ -79,7 +79,7 @@
           name: DeepSeek V4.1 Flash
           contextWindow: 1000000
           maxTokens: 131072
-          input: ['text']
+          input: ['text', 'image']
           reasoningEfforts:
             off:
             low: low
@@ -167,7 +167,7 @@
           name: LongCat 2.5 Preview Free
           contextWindow: 1000000
           maxTokens: 131072
-          input: ['text']
+          input: ['text', 'image']
           reasoningEfforts:
             off:
             minimal: minimal
@@ -215,19 +215,7 @@
           name: MiMo V2.6 Pro
           contextWindow: 1048576
           maxTokens: 128000
-          input: ['text']
-          reasoningEfforts:
-            off:
-            minimal: minimal
-            low: low
-            medium: medium
-            high: high
-            max: max
-        - id: minimax-m2.7
-          name: MiniMax-M2.7
-          contextWindow: 204800
-          maxTokens: 131072
-          input: ['text']
+          input: ['text', 'image']
           reasoningEfforts:
             off:
             minimal: minimal
@@ -261,7 +249,7 @@
           name: Space Bunny Free
           contextWindow: 131072
           maxTokens: 131072
-          input: ['text']
+          input: ['text', 'image']
           reasoningEfforts:
             off:
             minimal: minimal
@@ -358,6 +346,18 @@
         headers:
           x-opencode-session: 7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40
         models:
+        - id: minimax-m2.7
+          name: MiniMax-M2.7
+          contextWindow: 204800
+          maxTokens: 131072
+          input: ['text']
+          reasoningEfforts:
+            off:
+            minimal: minimal
+            low: low
+            medium: medium
+            high: high
+            max: max
         - id: minimax-m3
           name: MiniMax-M3
           contextWindow: 1000000

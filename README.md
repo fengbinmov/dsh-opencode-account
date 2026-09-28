@@ -2,7 +2,7 @@
 
 非官方 DeepSeek Harness 插件：把 **DeepSeek Harness** 接到 **OpenCode Go / Go Plus**（[opencode.ai](https://opencode.ai)），
 并在 **设置 → OpenCode** 里显示账户页——配额窗口、Console 消费报表、各模型额度换算、实时模型目录。
-页面形态与 `@mars-sea/dsh-commandcode-provider` 的设置页一致（同一套 `cc-` 风格行、同款配额条、同样的浮动保存条）。
+页面形态参考 `@mars-sea/dsh-commandcode-provider` 的设置页（同一套 `cc-` 风格行、同款配额条），但只做展示，不带设置表单。
 
 ## 界面预览
 
@@ -71,6 +71,84 @@ node scripts/build-provider-models.mjs --offline # 无网络时沿用已提交�
 
 结果写进 `cordis.patch.yml`（插件包层）**和** `$DSH_HOME/settings.yaml`（用户层，即 Models
 页面会改写的那个文档）——两处都要写，否则在 GUI 里点一次保存就会把清单丢掉。
+
+### 能力：读权威目录，不靠猜也不靠试
+
+模型能力来自 **[models.dev](https://models.dev) 的 `api.json`** —— OpenCode 生态发布的模型目录，
+控制台里那份 features 列表就出自它。一次请求给全部：
+
+| 字段 | 内容 |
+|---|---|
+| `modalities.input` | `text` / `image` / `audio` / `video` / `pdf` |
+| `reasoning_options` | 推理档位（如 `low` / `high` / `max`） |
+| `limit` | `context` / `output` |
+| `cost` | 输入 / 输出 / 缓存读价 |
+| `attachment`、`tool_call`、`structured_output`、`temperature`、`knowledge` | 其余能力 |
+
+```sh
+node scripts/fetch-model-metadata.mjs      # 拉 models.dev → model-metadata.json
+node scripts/build-provider-models.mjs     # 据此生成两份配置
+```
+
+#### 但 dsh 只能声明 `text` 和 `image`
+
+```ts
+export interface ModelModalityMap { text: 'text'; image: 'image'; }
+```
+
+`models.dev` 里**有 18 个模型带 `audio` / `video` / `pdf`，这些写不进路由配置**（schema 只认
+那两个值）。它们仍然**显示在账户页**（`额外输入: video · pdf`），只是不能据此启用附件。
+
+#### 协议没有元数据来源，只能实测
+
+`models.dev` 在 provider 级只给一个 `npm` / `api` 对（`@ai-sdk/openai-compatible`），
+**区分不了这个订阅跨的三种端点**，模型级更没有协议字段。而协议由**路由**决定，
+配错等于模型直接不可用 —— 所以这一项必须问网关。它抓到 1 个：
+
+```
+minimax-m2.7   配置 openai-completions → 网关 400 ModelProtocolUnsupported
+               实际只在 anthropic-messages 上可用   → 已迁到 messages 路由
+```
+
+pi-ai 的目录说它是 `openai-completions`，所以这不是笔误，是**元数据本身过时**。
+（附带确认：`minimax-m3` 两个协议都能用，`minimax-m2.7` 只认 `messages`。）
+
+**修正记录在代码里，不是生成物**：`scripts/build-provider-models.mjs` 的 `PROTOCOL_FIXES`
+常量保存例外，`probe-protocol.mjs` 只负责**发现**新的例外并打印可直接粘贴的条目：
+
+```sh
+node scripts/probe-protocol.mjs    # 逐个验证；有分歧时打印要加进 PROTOCOL_FIXES 的行
+```
+
+这样做的原因：探测的完整输出是"24 行与声明一致 + 1 行修正"，只有修正值得留 ——
+那是一个常量，不是一个需要入库的产物。
+
+> **附带发现**：在你当前工作区，`gpt-6-luna` / `gpt-5.6-luna` 报
+> `403 unsupported_country_region_territory`，`grok-4.6` / `grok-4.7` 报
+> `Endpoint is unavailable`，`muse-spark-1.2/1.3` 需要先在控制台允许 paid endpoints。
+> 这是 provider 侧的可用性（多半与工作区隐私区域设置有关），**不是配置问题**，
+> 但意味着这几个模型现在选它们会失败。
+
+#### 已删除：图像探测
+
+早期版本用"发一张纯红图、问模型什么颜色"逐个探测图像能力，这个方法有硬伤，已连同
+其脚本与结果文件一起删除：
+
+- 只问得了 image，**永远发现不了** audio / video / pdf；
+- 30 个模型 = 30 次真实请求，每轮都消耗额度；
+- 单次答案就有噪声 —— 它把 `longcat-2.5-preview-free` 判成"不支持"，
+  而目录说它有 image。
+
+目录未收录的 `deepseek-flash` 现在由 `EXTRA_MODELS` 直接声明，不再需要探测。
+
+#### 哪些文件需要入库
+
+| 文件 | 入库 | 原因 |
+|---|---|---|
+| `cordis.patch.yml` | ✅ | DSH 启动时读的配置本体 |
+| `model-metadata.json` | ✅ | **host 运行时依赖**：账户页的"额外输入"读它。不入库则克隆后跑起来能力栏是空的（`fetch-model-metadata.mjs` 可刷新） |
+| `protocol-capability.json` | ❌ 已删 | 信息量只有 1 条修正，已变成代码里的 `PROTOCOL_FIXES` 常量 |
+| `vision-capability.json` | ❌ 已删 | 方法被 models.dev 取代 |
 
 ### 路由级 `baseURL`（漏了会直接报错）
 
@@ -269,9 +347,14 @@ pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位�
 2. **账户**：账号（email/user_id）、密钥掩码、密钥来源、provider 路由、API 根、会话 ID、更新时间；下面一行是**订阅档位**徽章，配置里的那一档标 `← 当前档位`。
 3. **用量配额**：三行，每行是 `label + 百分比 + 4px 填充条 + 重置时间 · 倒计时`；触限（`status: rate-limited` 或 100%）时百分比行加红字、条变红。
 4. **消费与额度**：区间消费、预算上限（未设上限就写"未设上限"，绝不写成 0）、请求数、统计区间；有 Top 模型条形时按消费排序展示；下面附「为什么没有"余额"数字」的说明与 Console 链接。
-5. **模型目录**：每个模型一张小卡——id、名称、月额度徽章（`不限量` / `未收录额度`）、已用/剩余折算条、官方价格（入/出/缓存读/缓存写，DeepSeek 系列另标峰时价）。
-6. **设置**：订阅档位下拉 + 折叠的「高级设置」（API 根、Console 根、统计区间、会话 ID、超时）。
-7. **浮动保存条**：有改动才出现，含「放弃 / 保存」。
+5. **模型目录**：每个模型一张小卡——id、名称、月额度徽章（`不限量` / `未收录额度`）、已用/剩余折算条、官方价格（入/出/缓存读/缓存写，DeepSeek 系列另标峰时价），以及 `额外输入` 里 dsh 声明不了的模态。
+6. **版本页脚**。
+
+> 这里**没有设置表单**。早期版本在底部放了一个（档位下拉 + 高级设置 + 浮动保存条），
+> 但它是个**假保存**：`save()` 只设了个本地标志，不写回任何配置，刷新即丢，却显示"已保存"。
+> 与其实现一套真正的配置写回（要接 dsh 的 settings remote 并改写你的 `settings.yaml`），
+> 不如去掉它 —— 这些值本来就很少改，改的话直接编辑
+> `cordis.patch.yml` 或 `$DSH_HOME/settings.yaml`（见「安装」一节）。
 
 ## 四、安装
 
@@ -309,11 +392,24 @@ dsh plugin --profile web add "F:/Code/Ai/Opencode Provider"
 ## 五、验证
 
 ```sh
-node test-host.mjs           # 真调 opencode.ai，断言配额/目录/预算与"响应体不含完整 key"
-node test-host.mjs --offline # 无网络：断言缺凭据时的提示路径
-node test-client.mjs         # 渲染 loading/就绪/触限/缺密钥/上游失败/权限不足/中英文 + 表单交互
-node scripts/build-provider-models.mjs --check   # 模型清单是否仍与套餐一致
+npm test                     # 全部离线检查（不含需要凭据的 live 调用）
 ```
+
+逐项：
+
+```sh
+node test-client.mjs         # 渲染 loading/就绪/触限/缺密钥/上游失败/权限不足/中英文，并断言设置表单不再出现
+node test-config.mjs         # 让 dsh 自己的适配器加载生成的配置：30/30 可解析、协议修正生效
+node test-reasoning.mjs      # 推理等级契约：default ≡ Off，命名档位带 reasoning_effort
+node test-host.mjs           # 真调 opencode.ai：配额/目录/预算/能力，并断言响应体不含完整 key
+node test-host.mjs --offline # 无网络：断言缺凭据时的提示路径
+node scripts/build-provider-models.mjs --check   # 模型清单/能力/协议是否仍与套餐一致
+```
+
+> `test-config.mjs` 是其中最要紧的一个：它驱动 `dsh-llm-pi-ai` 本体去解析
+> `cordis.patch.yml`，所以断言的是"**dsh 接受这份配置**"，而不是"这份 YAML 能解析"。
+> 开发期间两个真缺陷（缺 `baseURL`、`minimax-m2.7` 协议错）都只会在 dsh 启动时暴露，
+> 而手工验证不算回归测试。
 
 端到端验证用**隔离实例**，不碰正在用的那个：
 

@@ -202,6 +202,8 @@ const readyData = {
 			peak: { input: 0.3, output: 1.2, cacheRead: 0.006 },
 			note: 'peak',
 			route: { id: 'opencode-go', label: 'OpenCode Go' },
+			// Modalities models.dev records that a route profile cannot declare.
+			capabilities: { input: ['text', 'image', 'video', 'pdf'], output: ['text'], toolCall: true },
 			used: 0.1083,
 			remaining: 59.89,
 		},
@@ -297,17 +299,12 @@ const FIELD_DEFAULTS = {
 
 function render(label, accountState) {
 	stateIndex = 0;
-	// Hook call order: useAccount's request state, its two effect slots, then the
-	// local form's render tick, then SettingsSection's `open`. Refs persist across
-	// renders (keyed by hook slot), which is what makes the staged form work.
-	presetStates = [accountState, undefined, undefined, 0, false];
+	// The page has exactly one stateful hook: `useAccount`'s request state. The
+	// settings form that used to add a render tick and an `open` flag is gone.
+	presetStates = [accountState];
 	const tree = registration.component();
 	const collected = props(tree);
 	const text = flatten(tree).filter((value) => String(value).trim().length > 0);
-	if (process.env.OC_DEBUG === '1') {
-		const bar = collected.find((entry) => entry['data-savebar'] !== undefined);
-		console.log('DEBUG savebar:', JSON.stringify(bar));
-	}
 	console.log(`\n########## ${label} ##########`);
 	console.log(text.join(' | '));
 	return { text, props: collected };
@@ -353,8 +350,10 @@ expect('ready', ready.text, [
 	// The Models picker lists three routes, so the page must say which one a
 	// model lands on.
 	'OpenCode Go (Responses)',
-	'设置',
-	'高级设置',
+	'额外输入',
+	'峰时',
+	'video',
+	'pdf',
 ]);
 // A light user's window is NOT zero: the exact percentage must survive (the
 // gateway's /usage would have rounded 0.141% down to a flat 0).
@@ -365,9 +364,12 @@ if (!(monthlyBar['aria-valuenow'] > 0 && monthlyBar['aria-valuenow'] < 1)) {
 }
 expect('ready exact money', ready.text, ['$0.34 / $48.00', '$0.34 / $120.00', '$0.34 / $240.00', '0.7%', '0.1%']);
 
-// A fresh page must not advertise unsaved changes.
-if (ready.text.includes('有未保存的改动')) throw new Error('ready: the save bar must stay hidden on a fresh page');
-if (ready.text.includes('放弃')) throw new Error('ready: the discard button must stay hidden on a fresh page');
+// The page shows account data only. A settings form used to sit at the bottom
+// and pretended to save (it only set a local flag), so its absence is asserted
+// rather than left to chance — a reintroduced form would fail here.
+for (const gone of ['设置', '高级设置', '已保存', '放弃', '有未保存的改动']) {
+	if (ready.text.includes(gone)) throw new Error(`ready: the removed settings form left "${gone}" on the page`);
+}
 
 const burned = render('ready (window burned)', { status: 'ready', data: burnedData, error: undefined });
 expect('burned', burned.text, ['已触限', '72.5%']);
@@ -420,43 +422,5 @@ expect('english', english.text, [
 	'Go Plus $40/month',
 	'current plan',
 ]);
-
-// ---------------------------------------------------------------------------
-// Staged form behaviour. Run LAST: the page's local form store is module-scoped,
-// so an edit here would leak into every later frame. (With a host inject face
-// the store lives in the host's settings scope instead.)
-globalThis.document = { ...globalThis.document, documentElement: { lang: 'zh-CN' } };
-const formStart = render('form (fresh)', { status: 'ready', data: readyData, error: undefined });
-if (formStart.text.includes('有未保存的改动')) throw new Error('form: fresh page must not look dirty');
-const planSelect = formStart.props.find((entry) => entry.id === 'oc-plan');
-if (planSelect === undefined) throw new Error('form: the plan select is missing');
-if (typeof planSelect.onChange !== 'function') throw new Error('form: the plan select has no onChange handler');
-if (planSelect.value !== '') throw new Error(`form: the plan select should start empty, got ${planSelect.value}`);
-if (process.env.OC_DEBUG === '1') {
-	const planEdit = formStart.props.find((entry) => entry.id === 'oc-plan' && typeof entry.onChange === 'function');
-	console.log('DEBUG select props:', Object.keys(planEdit ?? {}).join(','));
-	console.log('DEBUG first edit result:', String(planEdit.onChange({ target: { value: 'go-plus' } })));
-}
-
-planSelect.onChange({ target: { value: 'go-plus' } });
-const edited = render('form (plan edited)', { status: 'ready', data: readyData, error: undefined });
-expect('form edited', edited.text, ['有未保存的改动', '放弃', '保存', '已自定义']);
-
-const saveActions = edited.props.find((entry) => typeof entry.onDiscard === 'function');
-if (saveActions === undefined) {
-	console.log('DEBUG bar props:', JSON.stringify(edited.props.filter((entry) => JSON.stringify(Object.keys(entry)).includes('saveBar') || entry['data-savebar'] !== undefined || entry.onSave !== undefined)));
-	throw new Error('form: save bar actions missing');
-}
-saveActions.onDiscard();
-const discarded = render('form (discarded)', { status: 'ready', data: readyData, error: undefined });
-if (discarded.text.includes('有未保存的改动')) throw new Error('form: discard must clear the dirty flag');
-const discardedBar = discarded.props.find((entry) => entry['data-savebar'] !== undefined);
-if (discardedBar === undefined || discardedBar['data-savebar'] !== 'hidden') {
-	throw new Error('form: the save bar should hide after discard');
-}
-const planAfter = discarded.props.find((entry) => entry.id === 'oc-plan');
-if (planAfter === undefined || planAfter.value !== '') {
-	throw new Error(`form: the plan field should be back at its default, got ${JSON.stringify(planAfter?.value)}`);
-}
 
 console.log('\nall render branches OK');

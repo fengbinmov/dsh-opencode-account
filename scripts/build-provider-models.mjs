@@ -162,20 +162,32 @@ function piAiCatalog() {
 }
 
 /**
- * Gateway models pi-ai does not describe, with the facts the docs publish for
- * them: the endpoint table gives the protocol, the price table gives the name.
- * `input` follows the pi-ai rows of the same family, `maxTokens` caps at 128K
- * (the gateway's out-of-catalog ceiling), and `contextWindow` is the family's
- * published window — `window-unverified` marks the one the docs never printed.
+ * Models pi-ai's installed catalog does not describe, declared in full.
+ *
+ * These need an entry because the installed catalog is the only other source of
+ * a model's `api` — and **no metadata source publishes the wire protocol**
+ * (models.dev carries one `npm`/`api` pair per provider, which cannot separate
+ * the three endpoints this subscription spans). Everything else here is a
+ * fallback for the day models.dev stops listing the model:
+ *
+ *   `input`  — models.dev normally decides (see `inputFor`); `deepseek-flash` is
+ *              the one entry that still relies on this declaration.
+ *   `name`, `contextWindow`, `maxTokens` — from the docs' price table and the
+ *              family's published window; `window-unverified` marks the window
+ *              the docs never printed.
  *
  * `thinkingLevelMap` is what makes the reasoning-effort selector appear at all.
- * pi-ai's `getSupportedThinkingLevels` returns `['off']` for any model whose
+ * pi-ai's `getSupportedThinkingLevels` returns `['off']` for a model whose
  * `reasoning` flag is unset, and an entry the installed catalog does not
- * describe starts with nothing — so leaving this out is exactly why the new
- * models offer no efforts. Each map follows the family's catalog row: a
- * non-null value is the wire spelling sent for that level, `null` means the
- * level is not offered (only `off` may stay empty), and `xhigh`/`max` are
- * offered only when present here.
+ * describe starts with nothing — so leaving this out is exactly why the added
+ * models offered no efforts. A non-null value is the wire spelling sent for that
+ * level, `null` means "not offered" (only `off` may stay empty), and
+ * `xhigh`/`max` are offered only when present.
+ *
+ * This stays on pi-ai's map rather than models.dev's `reasoning_options`: the
+ * two disagree on 5 models and spell "off" differently (`none`), so switching
+ * would need a translation layer for no gain — every model already resolves its
+ * levels correctly from the map.
  */
 const EXTRA_MODELS = {
 	'deepseek-flash': {
@@ -183,7 +195,7 @@ const EXTRA_MODELS = {
 		name: 'DeepSeek Flash',
 		contextWindow: 1000000,
 		maxTokens: 131072,
-		input: ['text'],
+		input: ['text', 'image'],
 		// same row shape as deepseek-v4-flash
 		thinkingLevelMap: { low: 'low', high: 'high', max: 'max' },
 	},
@@ -192,7 +204,7 @@ const EXTRA_MODELS = {
 		name: 'DeepSeek V4.1 Flash',
 		contextWindow: 1000000,
 		maxTokens: 131072,
-		input: ['text'],
+		input: ['text', 'image'],
 		thinkingLevelMap: { low: 'low', high: 'high', max: 'max' },
 	},
 	'gpt-6-luna': {
@@ -217,7 +229,7 @@ const EXTRA_MODELS = {
 		name: 'LongCat 2.5 Preview Free',
 		contextWindow: 1000000,
 		maxTokens: 131072,
-		input: ['text'],
+		input: ['text', 'image'],
 		thinkingLevelMap: ALL_LEVELS,
 	},
 	'mimo-v2.6-flash': {
@@ -233,7 +245,7 @@ const EXTRA_MODELS = {
 		name: 'MiMo V2.6 Pro',
 		contextWindow: 1048576,
 		maxTokens: 128000,
-		input: ['text'],
+		input: ['text', 'image'],
 		thinkingLevelMap: ALL_LEVELS,
 	},
 	'space-bunny-free': {
@@ -241,7 +253,7 @@ const EXTRA_MODELS = {
 		name: 'Space Bunny Free',
 		contextWindow: 131072,
 		maxTokens: 131072,
-		input: ['text'],
+		input: ['text', 'image'],
 		thinkingLevelMap: ALL_LEVELS,
 		note: 'window-unverified',
 	},
@@ -318,6 +330,50 @@ const settingsPath = join(dshHome, 'settings.yaml');
 const ids = live ?? declaredIds(patchPath);
 if (ids.length === 0) throw new Error('no model list available; run once without --offline');
 
+/**
+ * Authoritative model metadata, from `scripts/fetch-model-metadata.mjs`
+ * (models.dev — the catalog OpenCode's own feature list is built from).
+ */
+function modelMetadata() {
+	try {
+		const raw = JSON.parse(readFileSync(join(root, 'model-metadata.json'), 'utf8'));
+		if (raw.models === undefined || typeof raw.models !== 'object') return undefined;
+		return raw.models;
+	} catch {
+		return undefined;
+	}
+}
+
+const METADATA = modelMetadata();
+if (METADATA !== undefined) console.log(`  metadata from models.dev: ${Object.keys(METADATA).length} models`);
+
+/** dsh's own `ModelModality` is exactly these two; the catalog lists more. */
+const DECLARABLE_MODALITIES = ['text', 'image'];
+
+/**
+ * The `input` list one model should carry.
+ *
+ * models.dev decides. The declared value in {@link EXTRA_MODELS} is only the
+ * fallback for a model the catalog does not describe — today just
+ * `deepseek-flash`. The catalog's extra modalities (audio / video / pdf) are
+ * filtered out because a route profile can only carry text and image; the
+ * account page shows them instead.
+ *
+ * This replaced a live image probe, which could only ever ask about images (it
+ * never revealed audio/video/pdf), cost 30 requests per run, and got one model
+ * wrong (`longcat-2.5-preview-free`).
+ */
+function inputFor(id, declared) {
+	const catalogued = METADATA?.[id]?.modalities?.input;
+	if (Array.isArray(catalogued) && catalogued.length > 0) {
+		const declarable = catalogued.filter((modality) => DECLARABLE_MODALITIES.includes(modality));
+		// A model whose entry lists nothing declarable keeps the declared text
+		// floor rather than resolving to an empty (unserviceable) list.
+		if (declarable.length > 0) return declarable;
+	}
+	return declared;
+}
+
 /** One model's resolved facts: the catalog knows it, or EXTRA_MODELS does. */
 function facts(id) {
 	const base = piAi.get(id);
@@ -327,7 +383,7 @@ function facts(id) {
 			name: base.name,
 			contextWindow: base.contextWindow,
 			maxTokens: base.maxTokens,
-			input: base.input,
+			input: inputFor(id, base.input),
 			// pi-ai treats a MISSING map as "every level", so spell that out here
 			// too: leaving it to inheritance is what silently dropped the selector.
 			thinkingLevelMap: base.thinkingLevelMap ?? ALL_LEVELS,
@@ -336,17 +392,55 @@ function facts(id) {
 	}
 	const extra = EXTRA_MODELS[id];
 	if (extra === undefined) throw new Error(`no declaration for gateway model "${id}"; add it to EXTRA_MODELS`);
-	return { ...extra, inherited: false };
+	return { ...extra, input: inputFor(id, extra.input), inherited: false };
 }
 
 const resolved = new Map(ids.map((id) => [id, facts(id)]));
 
+/**
+ * Protocol corrections, measured against the gateway.
+ *
+ * The protocol comes from the ROUTE, so a model filed on the wrong one is
+ * simply unusable. Nothing publishes it as metadata — models.dev carries one
+ * `npm`/`api` pair per provider, which cannot separate the three endpoints this
+ * subscription spans — so the declared entry is the only other source, and
+ * pi-ai's catalog is occasionally stale about it.
+ *
+ * `scripts/probe-protocol.mjs` re-checks every model against the gateway and
+ * prints any divergence; a confirmed one gets an entry here. Kept as code rather
+ * than a generated file because the useful content is this short list of
+ * exceptions — the probe's full 24-row output was 23 rows of "agrees with the
+ * declaration" and one correction, which is a constant, not an artifact.
+ */
+const PROTOCOL_FIXES = new Map([
+	// pi-ai says openai-completions; the gateway answers `400
+	// ModelProtocolUnsupported` there and serves it on messages.
+	['minimax-m2.7', 'anthropic-messages'],
+]);
+
+/** The protocol to serve one model on: the measured correction beats the guess. */
+function protocolFor(id) {
+	return PROTOCOL_FIXES.get(id) ?? resolved.get(id).api;
+}
+
+const unknownProtocols = [...new Set(ids.map(protocolFor))].filter(
+	(api) => !ROUTES.some((route) => route.api === api),
+);
+if (unknownProtocols.length > 0) {
+	throw new Error(`models resolved onto protocols with no route: ${unknownProtocols.join(', ')}`);
+}
+
+for (const [id, api] of PROTOCOL_FIXES) {
+	const declared = resolved.get(id)?.api;
+	if (declared !== undefined && declared !== api) console.log(`  protocol corrected: ${id} ${declared} → ${api}`);
+}
+
 /** Group the catalog by protocol; every route is one protocol's slice. */
 const grouped = ROUTES.map((route) => ({
 	...route,
-	models: ids.filter((id) => resolved.get(id).api === route.api),
+	models: ids.filter((id) => protocolFor(id) === route.api),
 }));
-const ungrouped = ids.filter((id) => !ROUTES.some((route) => route.api === resolved.get(id).api));
+const ungrouped = ids.filter((id) => !ROUTES.some((route) => route.api === protocolFor(id)));
 if (ungrouped.length > 0) throw new Error(`models on no configured protocol: ${ungrouped.join(', ')}`);
 if (grouped.some((route) => route.models.length === 0)) {
 	throw new Error(`a route resolved no models: ${grouped.map((route) => `${route.id}=${route.models.length}`).join(' ')}`);
@@ -519,6 +613,18 @@ function syncSettings() {
 }
 
 if (check) {
+	/**
+	 * Compare the WRITTEN block, not just the id list.
+	 *
+	 * An id-only check cannot see the fields that actually decide behaviour:
+	 * `input` (whether the composer offers attachments), the route's `api` and
+	 * `baseURL`, `reasoning` (the default effort). All of those are derived from
+	 * models.dev and the probes, so a catalog refresh changes them WITHOUT
+	 * changing a single id — and an id-only check would report "in sync" while
+	 * the plugin still described the previous capabilities.
+	 */
+	const actualBlock = marker.exec(source)?.[0];
+	const blockStale = actualBlock !== generatedBlock;
 	const declared = declaredIds(patchPath);
 	const settingsDeclared = declaredIds(settingsPath);
 	const same =
@@ -526,10 +632,27 @@ if (check) {
 		declared.every((id, index) => id === ids[index]) &&
 		settingsDeclared.length === ids.length &&
 		settingsDeclared.every((id, index) => id === ids[index]);
-	if (!same) {
-		console.error(
-			`declared patch=${declared.length} settings=${settingsDeclared.length}, gateway serves ${ids.length}`,
-		);
+	if (blockStale || !same) {
+		if (blockStale) {
+			const actualInputs = new Map(
+				[...(actualBlock ?? '').matchAll(/- id: (\S+)\n(?:.*\n)*?\s+input: \[([^\]]*)\]/g)].map((m) => [
+					m[1],
+					m[2].replace(/'/g, '').trim(),
+				]),
+			);
+			const changed = ids.filter((id) => actualInputs.get(id) !== (resolved.get(id).input ?? []).join(', '));
+			console.error(
+				changed.length > 0
+					? `the written model block is stale; capabilities changed for: ${changed.join(', ')}`
+					: 'the written model block is stale (routes, reasoning default or metadata changed)',
+			);
+		}
+		if (!same) {
+			console.error(
+				`declared patch=${declared.length} settings=${settingsDeclared.length}, gateway serves ${ids.length}`,
+			);
+		}
+		console.error('run: node scripts/build-provider-models.mjs');
 		process.exit(1);
 	}
 	console.log(`provider catalog matches the gateway (${ids.length} models over ${grouped.length} routes)`);
