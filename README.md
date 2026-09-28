@@ -1,8 +1,8 @@
 # OpenCode 账户页（dsh-opencode-account）
 
 非官方 DeepSeek Harness 插件：把 **DeepSeek Harness** 接到 **OpenCode Go / Go Plus**（[opencode.ai](https://opencode.ai)），
-并在 **设置 → OpenCode** 里显示账户页——配额窗口、Console 消费报表、各模型额度换算、实时模型目录。
-页面形态参考 `@mars-sea/dsh-commandcode-provider` 的设置页（同一套 `cc-` 风格行、同款配额条），但只做展示，不带设置表单。
+并在 **设置 → OpenCode** 里显示账户页——配额窗口、Console 消费报表、各模型的真实消费与额度、实时模型目录。
+页面形态参考 `@mars-sea/dsh-commandcode-provider` 的设置页（行式布局 + 同款配额条），但**只做展示，不带设置表单**。
 
 ## 界面预览
 
@@ -11,16 +11,25 @@
 ## 仓库结构
 
 ```
-F:\Code\Ai\Opencode Provider\
-├─ package.json          插件清单（dsh.bundle + dsh.client）
-├─ cordis.patch.yml      插件包层：注册 provider 路由 + 账户页
+<插件目录>\
+├─ package.json           插件清单（dsh.bundle + dsh.client）
+├─ cordis.patch.yml       插件包层：注册 3 条 provider 路由 + 账户页
+├─ model-metadata.json    models.dev 快照；host 运行时读它展示完整能力
 ├─ lib/
-│  ├─ index.js           host 半：注册 GET /opencode/account（零第三方依赖）
-│  ├─ opencode.js        host 半：opencode.ai HTTP 客户端（两张命名空间）
-│  ├─ catalog.js         静态额度表与价目表（来自官方文档）
-│  └─ client.js          浏览器半：设置页（window.__ModuleLoader__ 格式，无构建步骤）
-├─ test-host.mjs         host 半验证：真调 /opencode/account
-└─ test-client.mjs       浏览器半验证：假 __ModuleLoader__ + stub react 渲染全分支
+│  ├─ index.js            host 半：注册 GET /opencode/account（零第三方依赖）
+│  ├─ opencode.js         host 半：opencode.ai HTTP 客户端（两张命名空间）
+│  ├─ catalog.js          静态额度表、价目表与路由归属
+│  └─ client.js           浏览器半：账户页（window.__ModuleLoader__ 格式，无构建步骤）
+├─ scripts/
+│  ├─ fetch-model-metadata.mjs   拉 models.dev → model-metadata.json
+│  ├─ build-provider-models.mjs  生成两份配置，--check 校验是否与套餐一致
+│  └─ probe-protocol.mjs         协议实测（唯一没有元数据来源的项）
+├─ src/yulantu.png        界面预览
+├─ test-client.mjs        浏览器半：假 __ModuleLoader__ + stub react 渲染全分支
+├─ test-config.mjs        让 dsh 自己的适配器加载生成的配置
+├─ test-reasoning.mjs     推理等级契约（default ≡ Off 等）
+├─ test-host.mjs          host 半：真调 /opencode/account
+└─ LICENSE                MIT
 ```
 
 ## 一、它接入了什么
@@ -44,9 +53,11 @@ F:\Code\Ai\Opencode Provider\
 
 | 路由 | 协议 | 模型数 | 网关端点 |
 |---|---|---|---|
-| `opencode-go` | `openai-completions` | 22 | `/chat/completions` |
+| `opencode-go` | `openai-completions` | 21 | `/chat/completions` |
 | `opencode-go-responses` | `openai-responses` | 6 | `/responses` |
-| `opencode-go-messages` | `anthropic-messages` | 2 | `/messages` |
+| `opencode-go-messages` | `anthropic-messages` | 3 | `/messages` |
+
+（`opencode-go-messages` 之所以有 3 个而不是 2 个，是因为 `minimax-m2.7` 的协议被实测纠正过来了 —— 见下文。）
 
 > **选择器里会出现三个 OpenCode Go 条目**（`OpenCode Go` / `OpenCode Go (Responses)` /
 > `OpenCode Go (Messages)`）。这是当前 DSH 配置形状的硬约束，不是设计偏好：
@@ -319,8 +330,9 @@ pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位�
 **这就是"页面与控制台不一致"的根因** —— 轻度使用时 `/usage` 永远是 0，而控制台显示 0.7%。
 现在页面直接用 `go/status` 的金额与百分比，`/usage` 只在读不到 `go/status` 时兜底。
 
-**档位也不需要你手填**：`go/status` 返回 `product`（`"go"` 或 `"go-plus"`），页面自动标注并写明来源；
-配置里的 `plan` 只对读不到该接口的密钥生效。
+**档位也不需要你手填**：`go/status` 返回 `product`（`"go"` 或 `"go-plus"`），页面自动标注并写明来源。
+插件的默认配置**刻意不写 `plan`** —— 写了就等于把某一档当成所有人的档位；读不到该接口时页面显示
+"档位未标注"，而不是猜一个。
 
 **没有余额端点，这不是本插件的取舍**：
 
@@ -329,7 +341,7 @@ pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位�
 - Console 的余额字段只经浏览器 OAuth 会话的 `billing.get` 暴露，`/console/api/billing/status` 对 API key 回 **403**；
 - 官方 feature request [anomalyco/opencode#10448](https://github.com/anomalyco/opencode/issues/10448) 仍然 **open**，无官方回复。
 
-### 每模型金额是真实消费，不是折算
+### 每模型金额：真实消费，不是推算
 
 额度表（`lib/catalog.js`）给出每个模型的**月度上限**；**已用金额**取自 Console 用量导出的
 真实 `cost_micro_cents`，并**按当前计费周期过滤**（额度随订阅月重置，导出却是按天区间，
@@ -347,7 +359,7 @@ pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位�
 2. **账户**：账号（email/user_id）、密钥掩码、密钥来源、provider 路由、API 根、会话 ID、更新时间；下面一行是**订阅档位**徽章，配置里的那一档标 `← 当前档位`。
 3. **用量配额**：三行，每行是 `label + 百分比 + 4px 填充条 + 重置时间 · 倒计时`；触限（`status: rate-limited` 或 100%）时百分比行加红字、条变红。
 4. **消费与额度**：区间消费、预算上限（未设上限就写"未设上限"，绝不写成 0）、请求数、统计区间；有 Top 模型条形时按消费排序展示；下面附「为什么没有"余额"数字」的说明与 Console 链接。
-5. **模型目录**：每个模型一张小卡——id、名称、月额度徽章（`不限量` / `未收录额度`）、已用/剩余折算条、官方价格（入/出/缓存读/缓存写，DeepSeek 系列另标峰时价），以及 `额外输入` 里 dsh 声明不了的模态。
+5. **模型目录**：每个模型一张小卡——id、名称、月额度徽章（`不限量` / `未收录额度`）、已用/剩余进度条、官方价格（入/出/缓存读/缓存写，DeepSeek 系列另标峰时价），以及 `额外输入` 里 dsh 声明不了的模态。
 6. **版本页脚**。
 
 > 这里**没有设置表单**。早期版本在底部放了一个（档位下拉 + 高级设置 + 浮动保存条），
@@ -453,11 +465,18 @@ dsh --profile octest --patch "./.dsh-test/model-overlay.yml" "reply with exactly
 
 ## 六、已知限制
 
-- `/usage`、`/console/api/...` 属非公开契约；上游改动时页面显示错误而不是崩溃。
-- **`/console/api/v1/usage/export` 需要 "All" 权限的 service account key**；inference-only 密钥一律 403。此时消费卡退回预算报表口径，并明说权限不足。
-- **档位不是自动探测的**：官方 API 不暴露它，`plan` 是配置里记录的一个事实。
-- **额度换算是推算**：官方只给百分比；月额度来自文档静态表，文档未收录的模型标 `未收录额度`（`deepseek-flash` 标 `inherited`）。
-- **模型可用性受工作区区域设置影响**：实测 `deepseek-v4-flash` 曾返回 `400 This Go model requires Global regions`，需在 [控制台](https://opencode.ai/auth) 把工作区隐私区域设为 Global。
+- `/usage`、`/console/api/...`、`models.dev` 都属非公开契约；上游改动时页面显示错误而不是崩溃。
+- **用量导出优先走 v2**：`/console/api/v2/usage/export` 对这把 key 返回 200，而 **v1 返回 403**。
+  两者都失败时消费卡退回预算报表口径，并明说权限不足。
+- **每模型的"已用"是真实消费，月额度则来自文档**：官方只按窗口给百分比，所以月额度取自
+  [Go 文档](https://opencode.ai/docs/go/) 的静态表；文档未收录的模型标 `未收录额度`。
+- **模型可用性受 provider 侧限制**：实测 `gpt-6-luna` / `gpt-5.6-luna` 报
+  `403 unsupported_country_region_territory`（多半与工作区隐私区域有关，需在 [控制台](https://opencode.ai/auth)
+  设为 Global），`grok-4.6` / `grok-4.7` 报 `Endpoint is unavailable`，`muse-spark-*` 需先允许 paid endpoints。
+- **pi-ai 目录的价格有 3 处过时**（`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、`glm-5.3-flash`）：
+  本插件的价目表与 models.dev 一致，但 DSH 的成本显示走 pi-ai 的目录，而路由配置没有 `cost` 字段可覆盖。
+- **档位与每模型消费都依赖 Console 接口**：读不到 `/api/go/status` 时档位显示"未标注"、
+  配额退回 `/usage` 的整数百分比；读不到用量导出时模型卡不显示已用/剩余（而不是编一个数）。
 - 页面只展示，不提供充值或切换订阅入口。
 
 ## License

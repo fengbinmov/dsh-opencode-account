@@ -175,11 +175,19 @@ if (offline) {
 		console.log('live note: this key cannot read Console spend data —', payload.errors.budgets);
 	}
 
-	const perModel = catalogued.find((model) => model.unlimited !== true && model.usedEstimate !== undefined);
-	if (perModel !== undefined) {
+	// Real per-model spend must actually arrive when the export is readable.
+	// This used to key off a field that has since been renamed (`usedEstimate`),
+	// so `find` returned undefined and the whole block silently did nothing —
+	// a passing test that asserted nothing. Assert, do not just print.
+	const withSpend = catalogued.filter((model) => model.unlimited !== true && typeof model.used === 'number');
+	if (payload.spend?.source === 'usage-export') {
+		if (withSpend.length === 0) {
+			throw new Error('live: the usage export was readable but no model carries real spend');
+		}
+		const sample = withSpend[0];
 		console.log(
-			`live estimate sample: ${perModel.id} allowance=$${perModel.allowance} ` +
-				`used=$${perModel.usedEstimate.toFixed(2)} remaining=$${perModel.remainingEstimate.toFixed(2)}`,
+			`live per-model spend: ${withSpend.length} models — e.g. ${sample.id} ` +
+				`used=$${sample.used.toFixed(4)} remaining=$${(sample.remaining ?? 0).toFixed(2)} allowance=$${sample.allowance}`,
 		);
 	}
 }
