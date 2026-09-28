@@ -27,10 +27,11 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node test-client.mjs && node test-host.mjs && node scripts/build-provider-models.mjs --check",
-    "test:offline": "node test-client.mjs && node test-host.mjs --offline",
+    "test": "node test-client.mjs && node test-host.mjs && node test-reasoning.mjs && node scripts/build-provider-models.mjs --check",
+    "test:offline": "node test-client.mjs && node test-reasoning.mjs && node test-host.mjs --offline",
     "test:client": "node test-client.mjs",
     "test:host": "node test-host.mjs",
+    "test:reasoning": "node test-reasoning.mjs",
     "sync:models": "node scripts/build-provider-models.mjs"
   },
   "dsh": {

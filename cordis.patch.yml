@@ -32,6 +32,7 @@
         api: openai-completions
         baseURL: https://opencode.ai/zen/go/v1
         apiKeyEnv: OPENCODE_API_KEY
+        reasoning: high
         headers:
           x-opencode-session: 7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40
         models:
@@ -273,6 +274,7 @@
         api: openai-responses
         baseURL: https://opencode.ai/zen/go/v1
         apiKeyEnv: OPENCODE_API_KEY
+        reasoning: high
         headers:
           x-opencode-session: 7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40
         models:
@@ -352,6 +354,7 @@
         api: anthropic-messages
         baseURL: https://opencode.ai/zen/go
         apiKeyEnv: OPENCODE_API_KEY
+        reasoning: high
         headers:
           x-opencode-session: 7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40
         models:

@@ -115,6 +115,68 @@ pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位�
 生成器写文件前会断言"每个模型至少有一个 `off` 以外的等级"——这个回归在 diff 里几乎
 看不出来，却会让所有模型的推理控制一起消失。
 
+### 选择器里的 `default` 到底是什么档位
+
+**它不代表任何档位，而且和 `Off` 逐字节等价 —— 两者都请求「关闭思考」。**
+
+那个 `default` 选项是 dsh 的 `effort.providerDefault`（提供方默认），只在**路由没有配置
+`reasoning` 默认档位**时出现；它的值就是 `undefined`。链路如下（用 pi-ai 自己的 API 层
+捕获实际请求体得到）：
+
+| 界面选项 | dsh 传给 pi-ai | pi-ai 实际发出的 body |
+|---|---|---|
+| `default` | 省略 `reasoning` | `thinking:{"type":"disabled"}`，无 `reasoning_effort` |
+| `Off` | `reasoning:"off"` → **也省略** | `thinking:{"type":"disabled"}`，无 `reasoning_effort` |
+| `Low` | `reasoning:"low"` | `thinking:{"type":"enabled"}` + `reasoning_effort:"low"` |
+| `High` | `reasoning:"high"` | `thinking:{"type":"enabled"}` + `reasoning_effort:"high"` |
+| `Max` | `reasoning:"max"` | `thinking:{"type":"enabled"}` + `reasoning_effort:"max"` |
+
+两处代码决定了这张表：
+
+- dsh 的 `profileOptions()`：`const enabledReasoning = reasoning === "off" ? undefined : reasoning`
+  —— `off` 被归一成"不传"，于是与 `default` 合流；
+- pi-ai 的 `thinkingFormat: "deepseek"` 分支：没有 `reasoningEffort` 时，只要
+  `thinkingLevelMap.off !== null` 就**主动发** `thinking:{"type":"disabled"}`。
+
+**但上游并不执行这个 `disabled`**：同一提示词各跑 3 次，`reasoning_content` 长度分别是
+不传 152/157/156、`disabled` 242/157/228、`enabled+high` 108/164/166 —— 三者**都在思考**，
+长度波动也不体现档位差异。
+
+所以 `default` / `Off` 的**实际效果是"网关自己决定"**，具体强度从 API 观测不到。
+需要注意的隐患：上游**一旦开始执行** `thinking:disabled`，选 `default` 或 `Off` 的会话会
+**突然失去思考能力**。
+
+### 已经把它默认成 `High`（消除那个坑）
+
+三条路由现在都带一个路由级默认：
+
+```yaml
+      opencode-go:
+        reasoning: high        # ← 用户没选档位时用它，而不是"提供方默认"
+```
+
+效果：dsh 会为每个**支持该档位**的模型发布 `defaultEffort`，选择器里那个
+"提供方默认"条目随之消失，默认直接落在 `High`（仍然是可改的，`Off`/`Low`/`Max` 照常可选）。
+
+选 `high` 而不是别的，是因为它的**支持面最广**：
+
+| 档位 | `opencode-go` (22) | responses (6) | messages (2) |
+|---|---|---|---|
+| `low` | 18 | 6 | 2 |
+| `medium` | **11** | 6 | 2 |
+| **`high`** | **20** | **6** | **2** |
+| `max` | 19 | 3 | 2 |
+
+**28/30 个模型因此拿到默认档位**；只有 `kimi-k3`（只支持 `off`/`max`）与 `qwen3.8-max`
+（不支持 `high`）保留"提供方默认"条目。
+
+> 不支持的模型**不会报错**：dsh 的 `describableReasoningLevel` 对取不到的档位返回"无默认"
+> 而不是抛异常（抛错只发生在请求路径上用户显式选了不支持的档位时）。生成器会在写入前
+> 断言"每条路由至少有一个模型支持该默认值"，并打印哪些模型被跳过。
+
+代价要清楚：**默认从此是 `High`**，比"网关默认"更费 thinking token。想改就改生成器里的
+`DEFAULT_REASONING` 再重跑，或直接在 `settings.yaml` 里改 `reasoning:`。
+
 ### 会话头
 
 `x-opencode-session` 是**必需**的：缺了直接 `400 MissingSessionID`，而 pi-ai 与 dsh
@@ -153,10 +215,28 @@ pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位�
 
 | 接口 | 内容 | 实测 |
 |---|---|---|
-| `GET {baseURL}/usage` | `rolling` / `weekly` / `monthly` 的 `status`、`percent`、`resetsAt` | 200，**只有百分比，没有金额** |
+| `GET {consoleURL}/api/go/status` | **配额与订阅的唯一权威**：`product`、`renewalProduct`、`useBalance`、`cancelAtPeriodEnd`、计费周期，以及 `fiveHour`/`week`/`month` 三个窗口的 `usedMicroCents`、`limitMicroCents`、`resetsAt` | 200 |
+| `GET {baseURL}/usage` | 同样三个窗口，但只有 `percent`（**整数**）与 `resetsAt` | 200，仅作 `go/status` 失败时的兜底 |
 | `GET {baseURL}/models` | 该密钥可调用的模型目录 | 200，本次 30 个 |
-| `GET {consoleURL}/api/v1/budgets/members` | 成员预算报表：`limit_micro_cents`、`spent_micro_cents`、`exceeded`、`resets_at`，以及账号 email/user_id | 200（真实账户消费） |
-| `GET {consoleURL}/api/v1/usage/export?scope=member&range=30d` | 逐日消费 CSV（含 `cost_micro_cents`、token 列） | 403（该密钥权限不足；inference-only 密钥都会 403） |
+| `GET {consoleURL}/api/v2/usage/export?range=30d` | 逐日消费 CSV（`cost_micro_cents`、token 列） | 200 |
+| `GET {consoleURL}/api/v1/usage/export?scope=member&range=30d` | 同上，旧命名空间 | **403**（该密钥读不到 v1；v2 才可用） |
+| `GET {consoleURL}/api/v1/budgets/members` | 成员预算报表：`limit_micro_cents`、`spent_micro_cents`、`resets_at`，以及账号 email/user_id | 200 |
+
+### 为什么不用网关的 `/usage` 做配额
+
+因为它把百分比**舍入成整数**，而控制台用的是 `go/status` 的精确微美分：
+
+| 窗口 | `/usage` | `go/status` |
+|---|---|---|
+| 5 小时 | `percent: 0` | `$0.338495 / $48` = **0.705%** |
+| 每周 | `percent: 0` | `$0.338495 / $120` = 0.282% |
+| 每月 | `percent: 0` | `$0.338495 / $240` = 0.141% |
+
+**这就是"页面与控制台不一致"的根因** —— 轻度使用时 `/usage` 永远是 0，而控制台显示 0.7%。
+现在页面直接用 `go/status` 的金额与百分比，`/usage` 只在读不到 `go/status` 时兜底。
+
+**档位也不需要你手填**：`go/status` 返回 `product: "go-plus"`，页面自动标注并写明来源；
+配置里的 `plan` 只对读不到该接口的密钥生效。
 
 **没有余额端点，这不是本插件的取舍**：
 
@@ -165,12 +245,17 @@ pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位�
 - Console 的余额字段只经浏览器 OAuth 会话的 `billing.get` 暴露，`/console/api/billing/status` 对 API key 回 **403**；
 - 官方 feature request [anomalyco/opencode#10448](https://github.com/anomalyco/opencode/issues/10448) 仍然 **open**，无官方回复。
 
-所以页面把**能观测到的**都摊开，并明确标注哪些是推算：
+### 每模型金额是真实消费，不是折算
 
-- **真实数字**：三个窗口的百分比与重置时间、预算报表的金额（micro-cents ÷ 1e8）、账号、模型目录。
-- **推算数字（页面标 `折算`）**：`月额度 × 月度窗口百分比` = 该模型已用金额，进而得到剩余。
-  月额度来自官方文档的静态表（见 `lib/catalog.js`），按档位换算：Go 档沿用文档数字，
-  Go Plus 档统一放大到 $60 上限。
+额度表（`lib/catalog.js`）给出每个模型的**月度上限**；**已用金额**取自 Console 用量导出的
+真实 `cost_micro_cents`，并**按当前计费周期过滤**（额度随订阅月重置，导出却是按天区间，
+不过滤就会把上个月的用量算进本月）。
+
+> 早期版本用"月度窗口百分比 × 月额度"去估算每个模型的已用金额，**那是错的**：
+> Go 的额度是**按模型独立**的，而窗口百分比是某一个模型自己额度的占比 ——
+> 一个模型花了 $0.34 会显示成"每个模型都用了 0.14%"。现在用真实消费，没有这种歧义。
+
+导出不可读时，模型卡片只显示月额度、不显示已用/剩余，而不是编一个数。
 
 ## 三、页面结构（自上而下）
 

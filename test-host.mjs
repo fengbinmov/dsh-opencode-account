@@ -109,6 +109,24 @@ if (offline) {
 		if (typeof window.percent !== 'number') throw new Error(`live: window ${id} should carry a numeric percent`);
 		if (typeof window.resetsAt !== 'string') throw new Error(`live: window ${id} should carry resetsAt`);
 	}
+	// The quota card must be the PRECISE surface. The gateway's `/usage` rounds its
+	// percentage to a whole number, so a real 0.7% arrives as `0` — the very
+	// disagreement with the console this plugin used to show. `/api/go/status`
+	// carries exact money, and the payload must have preferred it.
+	if (payload.usage?.source !== 'go-status') {
+		throw new Error(`live: quota should come from go/status, got "${payload.usage?.source}"`);
+	}
+	for (const id of ['rolling', 'weekly', 'monthly']) {
+		const window = windows[id];
+		if (typeof window.used !== 'number' || typeof window.limit !== 'number') {
+			throw new Error(`live: window ${id} should carry exact used/limit money`);
+		}
+		if (window.limit <= 0) throw new Error(`live: window ${id} limit must be positive`);
+	}
+	if (payload.planFromApi !== true) throw new Error('live: the plan tier should come from the API');
+	if (typeof payload.subscription?.periodEndsAt !== 'string') {
+		throw new Error('live: the subscription period end should be reported');
+	}
 
 	if (!Array.isArray(payload.models) || payload.models.length < 10) {
 		throw new Error(`live: expected a real model catalog, got ${payload.models?.length}`);

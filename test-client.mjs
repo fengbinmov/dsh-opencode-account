@@ -176,6 +176,7 @@ const readyData = {
 	dashboardURL: 'https://opencode.ai/console',
 	provider: 'opencode-go',
 	plan: 'go-plus',
+	planFromApi: true,
 	plans: [
 		{ id: 'go', name: 'Go', pricePerMonth: 10 },
 		{ id: 'go-plus', name: 'Go Plus', pricePerMonth: 40 },
@@ -186,9 +187,9 @@ const readyData = {
 	identity: { userId: 'user_01M3M2YA0HP2EQF30T75AZ7G0P', email: 'user@example.com' },
 	usage: {
 		windows: {
-			rolling: { status: 'ok', percent: 0, resetsAt: '2026-09-28T19:42:15.917Z' },
-			weekly: { status: 'ok', percent: 0, resetsAt: '2026-10-05T00:00:00.000Z' },
-			monthly: { status: 'ok', percent: 0, resetsAt: '2026-10-28T13:36:37.000Z' },
+			rolling: { status: 'ok', percent: 0.705, used: 0.338495, limit: 48, resetsAt: '2026-09-28T19:42:15.917Z' },
+			weekly: { status: 'ok', percent: 0.282, used: 0.338495, limit: 120, resetsAt: '2026-10-05T00:00:00.000Z' },
+			monthly: { status: 'ok', percent: 0.141, used: 0.338495, limit: 240, resetsAt: '2026-10-28T13:36:37.000Z' },
 		},
 	},
 	models: [
@@ -201,8 +202,8 @@ const readyData = {
 			peak: { input: 0.3, output: 1.2, cacheRead: 0.006 },
 			note: 'peak',
 			route: { id: 'opencode-go', label: 'OpenCode Go' },
-			usedEstimate: 12,
-			remainingEstimate: 48,
+			used: 0.1083,
+			remaining: 59.89,
 		},
 		{
 			id: 'gpt-6-luna',
@@ -211,8 +212,8 @@ const readyData = {
 			catalogued: true,
 			price: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
 			route: { id: 'opencode-go-responses', label: 'OpenCode Go (Responses)' },
-			usedEstimate: 3,
-			remainingEstimate: 12,
+			used: 0.0024,
+			remaining: 14.9976,
 		},
 		{
 			id: 'space-bunny-free',
@@ -257,13 +258,13 @@ const burnedData = {
 	...readyData,
 	usage: {
 		windows: {
-			rolling: { status: 'rate-limited', percent: 100, resetsAt: '2026-09-28T15:30:00.000Z' },
-			weekly: { status: 'ok', percent: 72.5, resetsAt: '2026-10-05T00:00:00.000Z' },
-			monthly: { status: 'ok', percent: 42, resetsAt: '2026-10-28T13:36:37.000Z' },
+			rolling: { status: 'rate-limited', percent: 100, used: 48, limit: 48, resetsAt: '2026-09-28T15:30:00.000Z' },
+			weekly: { status: 'ok', percent: 72.5, used: 87, limit: 120, resetsAt: '2026-10-05T00:00:00.000Z' },
+			monthly: { status: 'ok', percent: 42, used: 100.8, limit: 240, resetsAt: '2026-10-28T13:36:37.000Z' },
 		},
 	},
 	models: readyData.models.map((model) =>
-		model.id === 'deepseek-v4-flash' ? { ...model, usedEstimate: 25.2, remainingEstimate: 34.8 } : model,
+		model.id === 'deepseek-v4-flash' ? { ...model, used: 25.2, remaining: 34.8 } : model,
 	),
 };
 
@@ -334,6 +335,7 @@ expect('ready', ready.text, [
 	'Go $10/月',
 	'Go Plus $40/月',
 	'← 当前档位',
+	'由 /api/go/status 自动读取',
 	'账户',
 	'user@example.com',
 	'消费与额度',
@@ -345,7 +347,7 @@ expect('ready', ready.text, [
 	'模型目录',
 	'deepseek-v4-flash',
 	'月额度 $60.00',
-	'剩余 $48.00',
+	'剩余 $59.89',
 	'不限量',
 	'未收录额度',
 	// The Models picker lists three routes, so the page must say which one a
@@ -354,10 +356,14 @@ expect('ready', ready.text, [
 	'设置',
 	'高级设置',
 ]);
-// The monthly window at 0% must paint an empty bar, not a full one.
-const zeroBar = ready.props.find((entry) => entry.role === 'progressbar' && entry['aria-label'] === '每月');
-if (zeroBar === undefined) throw new Error('ready: monthly progressbar missing');
-if (zeroBar['aria-valuenow'] !== 0) throw new Error(`ready: monthly bar should read 0, got ${zeroBar['aria-valuenow']}`);
+// A light user's window is NOT zero: the exact percentage must survive (the
+// gateway's /usage would have rounded 0.141% down to a flat 0).
+const monthlyBar = ready.props.find((entry) => entry.role === 'progressbar' && entry['aria-label'] === '每月');
+if (monthlyBar === undefined) throw new Error('ready: monthly progressbar missing');
+if (!(monthlyBar['aria-valuenow'] > 0 && monthlyBar['aria-valuenow'] < 1)) {
+	throw new Error(`ready: monthly bar should carry a sub-1% reading, got ${monthlyBar['aria-valuenow']}`);
+}
+expect('ready exact money', ready.text, ['$0.34 / $48.00', '$0.34 / $120.00', '$0.34 / $240.00', '0.7%', '0.1%']);
 
 // A fresh page must not advertise unsaved changes.
 if (ready.text.includes('有未保存的改动')) throw new Error('ready: the save bar must stay hidden on a fresh page');

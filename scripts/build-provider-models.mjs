@@ -60,6 +60,24 @@ const offline = process.argv.includes('--offline');
 const SESSION = '7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40';
 
 /**
+ * The reasoning level every route defaults to.
+ *
+ * A route-level `reasoning` makes dsh publish a `defaultEffort`, which removes
+ * the picker's "provider default" entry — and that entry is a trap: it and `Off`
+ * are byte-identical (both send `thinking:{type:"disabled"}`), so leaving it
+ * selected means "ask for thinking off, then rely on the gateway ignoring it"
+ * (measured: it does ignore it today). Naming a level makes the default explicit.
+ *
+ * `high` is chosen because it has the WIDEST support across the Go catalog —
+ * 20/22 on `opencode-go`, 6/6 on responses, 2/2 on messages — versus `low` 18/22,
+ * `max` 19/22 and `medium` only 11/22. dsh drops the default for a model that
+ * cannot take it (`describableReasoningLevel` returns none rather than failing),
+ * so the two models without `high` (`kimi-k3`, `qwen3.8-max`) simply keep the
+ * "provider default" entry instead of erroring.
+ */
+const DEFAULT_REASONING = 'high';
+
+/**
  * Route ids, one per wire protocol. The plain `opencode-go` keeps the name the
  * Go docs use for the OpenAI-compatible endpoint, which is what most of the
  * catalog speaks.
@@ -81,18 +99,21 @@ const ROUTES = [
 		api: 'openai-completions',
 		displayName: 'OpenCode Go',
 		baseURL: 'https://opencode.ai/zen/go/v1',
+		reasoning: DEFAULT_REASONING,
 	},
 	{
 		id: 'opencode-go-responses',
 		api: 'openai-responses',
 		displayName: 'OpenCode Go (Responses)',
 		baseURL: 'https://opencode.ai/zen/go/v1',
+		reasoning: DEFAULT_REASONING,
 	},
 	{
 		id: 'opencode-go-messages',
 		api: 'anthropic-messages',
 		displayName: 'OpenCode Go (Messages)',
 		baseURL: 'https://opencode.ai/zen/go',
+		reasoning: DEFAULT_REASONING,
 	},
 ];
 
@@ -389,6 +410,31 @@ function assertReasoningPresent() {
 	}
 }
 
+/**
+ * The account page (`lib/catalog.js`) names the route a model belongs to, and it
+ * keeps its own table for that. Nothing links the two, so a route id renamed
+ * here would quietly make the page label every model wrong — check the pairing
+ * before writing.
+ */
+async function assertPageRoutesAgree() {
+	const catalog = await import(new URL('../lib/catalog.js', import.meta.url).href);
+	for (const route of grouped) {
+		const entry = Object.values(catalog.ROUTES).find((candidate) => candidate.id === route.id);
+		if (entry === undefined) {
+			throw new Error(`lib/catalog.js has no ROUTES entry for route "${route.id}"`);
+		}
+		if (entry.label !== route.displayName) {
+			throw new Error(
+				`route "${route.id}" is labelled "${route.displayName}" in the config but "${entry.label}" on the account page`,
+			);
+		}
+	}
+	const wrong = [...resolved.keys()].filter((id) => catalog.routeFor(id)?.id !== grouped.find((route) => route.models.includes(id))?.id);
+	if (wrong.length > 0) {
+		throw new Error(`lib/catalog.js maps these models to the wrong route: ${wrong.join(', ')}`);
+	}
+}
+
 /** Every fact is spelled out, so nothing depends on catalog inheritance. */
 function routeYaml(route, indent) {
 	const pad = ' '.repeat(indent);
@@ -398,6 +444,9 @@ function routeYaml(route, indent) {
 		`${pad}  api: ${route.api}`,
 		`${pad}  baseURL: ${route.baseURL}`,
 		`${pad}  apiKeyEnv: OPENCODE_API_KEY`,
+		// The route's default effort: it removes the picker's "provider default"
+		// entry on every model that supports the level (see DEFAULT_REASONING).
+		`${pad}  reasoning: ${route.reasoning}`,
 		`${pad}  headers:`,
 		`${pad}    x-opencode-session: ${SESSION}`,
 		`${pad}  models:`,
@@ -405,7 +454,35 @@ function routeYaml(route, indent) {
 	].join('\n');
 }
 
+/**
+ * A route default nothing can take would be dead configuration (and pointless
+ * noise in the file), so at least one model per route must offer it.
+ *
+ * "Offers it" means the map's VALUE is a wire spelling: pi-ai writes `null` for
+ * a level a model does NOT support, so counting keys would report levels the
+ * generated `reasoningEfforts` has already dropped.
+ */
+function assertDefaultReasoningUsable() {
+	for (const route of grouped) {
+		const supported = (id) => {
+			const wire = (resolved.get(id).thinkingLevelMap ?? {})[route.reasoning];
+			return wire !== undefined && wire !== null;
+		};
+		const takers = route.models.filter(supported);
+		if (takers.length === 0) {
+			throw new Error(`route "${route.id}" defaults to "${route.reasoning}", which no model on it supports`);
+		}
+		const skipped = route.models.filter((id) => !supported(id));
+		console.log(
+			`  ${route.id.padEnd(24)} default=${route.reasoning}: ${takers.length}/${route.models.length} models` +
+				(skipped.length > 0 ? ` (keeps provider-default: ${skipped.join(', ')})` : ''),
+		);
+	}
+}
+
 assertReasoningPresent();
+assertDefaultReasoningUsable();
+await assertPageRoutesAgree();
 
 const routeBlocks = grouped.map((route) => routeYaml(route, 6)).join('\n');
 const generatedBlock = [
