@@ -1,0 +1,15 @@
+# Reference checkouts used only while implementing this plugin.
+.ref-commandcode/
+cc/
+
+# Throwaway DSH home used for end-to-end verification against a private
+# profile + port, so the developer's live instance is never touched.
+.dsh-test/
+.backup-install/
+
+# pnpm store created by the throwaway profile's install
+.pnpm-store/
+
+# Local scratch
+*.log
+.DS_Store

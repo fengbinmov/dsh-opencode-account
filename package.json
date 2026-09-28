@@ -1,0 +1,58 @@
+{
+  "name": "dsh-opencode-account",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenCode (opencode.ai) account page for DeepSeek Harness: Go / Go Plus quota windows, Console spend & budget report, per-model usage allowance derived from the official price table, and the live model catalog — under Settings → OpenCode.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "opencode",
+    "opencode-go",
+    "opencode-zen",
+    "quota",
+    "usage",
+    "balance",
+    "account"
+  ],
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node test-client.mjs && node test-host.mjs && node scripts/build-provider-models.mjs --check",
+    "test:offline": "node test-client.mjs && node test-host.mjs --offline",
+    "test:client": "node test-client.mjs",
+    "test:host": "node test-host.mjs",
+    "sync:models": "node scripts/build-provider-models.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
