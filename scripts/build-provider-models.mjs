@@ -34,18 +34,33 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 
-/** js-yaml lives in the profile's tree, not in this checkout. */
+/**
+ * js-yaml lives in dsh's own tree, not in this checkout, and dsh installs in
+ * more than one shape. Every root `test-config.mjs` already searches has to be
+ * searched here too: searching only the web profile (the original list) misses
+ * a machine whose profile is named something else, and searching only the npm
+ * prefix misses the package's own nested dependency — which is exactly where
+ * js-yaml lands when dsh was installed with `npm i -g @deepseek-ai/dsh` and no
+ * plugin profile ever hoisted one.
+ */
 function loadJsYaml() {
-	const candidates = [
-		join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh', 'profiles', 'web', 'node_modules', 'js-yaml', 'index.js'),
-		join(process.env.APPDATA ?? '', 'npm', 'node_modules', 'js-yaml', 'index.js'),
-	];
-	for (const candidate of candidates) {
+	const home = process.env.USERPROFILE ?? process.env.HOME ?? '';
+	const appData = process.env.APPDATA ?? '';
+	const roots = [
+		process.env.DSH_NODE_MODULES,
+		home === '' ? undefined : join(home, '.dsh', 'profiles', 'node_modules'),
+		home === '' ? undefined : join(home, '.dsh', 'profiles', 'web', 'node_modules'),
+		appData === '' ? undefined : join(appData, 'npm', 'node_modules'),
+		appData === '' ? undefined : join(appData, 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules'),
+		'/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules',
+		'/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules',
+	].filter((root) => root !== undefined && root !== '');
+	for (const root of roots) {
 		try {
-			const loaded = require(candidate);
+			const loaded = require(join(root, 'js-yaml', 'index.js'));
 			return loaded.default ?? loaded;
 		} catch {
-			// Try the next candidate.
+			// Try the next root.
 		}
 	}
 	throw new Error('js-yaml not found; install the plugin profile first');
@@ -126,7 +141,68 @@ const ROUTES = [
 		baseURL: 'https://opencode.ai/zen/go',
 		reasoning: DEFAULT_REASONING,
 	},
+	{
+		// A SECOND route on the completions protocol, for exactly one model.
+		//
+		// `deepseek-v4.1-flash` runs its reasoning to the output limit without
+		// ever emitting a tool call — the "thinks but never acts" runaway.
+		// Upstream tracks it (opencode#44962 names this model and the
+		// `好。发。好。发。` fragment rotation). Measured against this gateway:
+		// the runaway is only reachable while a reasoning EFFORT is sent,
+		// because `thinking:{type:"disabled"}` really does stop the thinking —
+		// but only when no `reasoning_effort` rides beside it, and a route-level
+		// default always sends one. So this route deliberately carries NO
+		// `reasoning`: the picker falls back to "provider default", which is the
+		// bare disabled request, and the loop cannot start unless a human
+		// explicitly picks a level.
+		id: 'opencode-go-flash',
+		api: 'openai-completions',
+		displayName: 'OpenCode Go (Flash)',
+		baseURL: 'https://opencode.ai/zen/go/v1',
+		// pi-ai's catalog is keyed by PROVIDER id, so a route id pi-ai does not
+		// ship inherits nothing — not even the compat block every installed
+		// `opencode-go` model carries. Without it pi-ai's baseURL detection
+		// answers "as though it were OpenAI", sends no `thinking` field at all,
+		// and the gateway thinks anyway (measured: 4.6k chars of reasoning, i.e.
+		// the exact runaway this route exists to prevent). Spelled out here so
+		// the route behaves like the catalog entry it stands in for.
+		compat: {
+			supportsStore: false,
+			supportsDeveloperRole: false,
+			supportsStrictMode: true,
+			maxTokensField: 'max_tokens',
+			requiresReasoningContentOnAssistantMessages: true,
+			thinkingFormat: 'deepseek',
+		},
+	},
 ];
+
+/** The route that serves one protocol unless a model is assigned elsewhere. */
+const ROUTE_BY_PROTOCOL = {
+	'openai-completions': 'opencode-go',
+	'openai-responses': 'opencode-go-responses',
+	'anthropic-messages': 'opencode-go-messages',
+};
+
+/**
+ * Models that do NOT ride their protocol's route.
+ *
+ * The gateway assigns a model's ENDPOINT, which is what a protocol split is
+ * for; this is a different split, for a model whose per-model needs cannot be
+ * expressed on a shared route. `reasoning` and `compat` are route-level facts,
+ * so "this one model must not inherit a default effort" can only be said by
+ * giving it a route of its own.
+ */
+const MODEL_ROUTE = new Map([
+	// See the `opencode-go-flash` route above: no default reasoning level, so the
+	// runaway cannot start. `Off`/`Low`/`High`/`Max` stay selectable per session.
+	['deepseek-v4.1-flash', 'opencode-go-flash'],
+]);
+
+/** The route serving one model id, override first. */
+function routeIdFor(id) {
+	return MODEL_ROUTE.get(id) ?? ROUTE_BY_PROTOCOL[protocolFor(id)];
+}
 
 /**
  * pi-ai's "no thinkingLevelMap" semantics: every level at or below the model's
@@ -173,13 +249,18 @@ function piAiCatalog() {
 }
 
 /**
- * Models pi-ai's installed catalog does not describe, declared in full.
+ * Models this plugin declares in full, hand-written rather than inherited.
  *
- * These need an entry because the installed catalog is the only other source of
- * a model's `api` — and **no metadata source publishes the wire protocol**
- * (models.dev carries one `npm`/`api` pair per provider, which cannot separate
- * the three endpoints this subscription spans). Everything else here is a
- * fallback for the day models.dev stops listing the model:
+ * They WIN over the installed catalog (see `facts`). An entry lands here for one
+ * of two reasons: pi-ai's catalog was behind the gateway when the model was
+ * added — true of every entry below at the time it was written — or the
+ * declaration states something the catalog does not and the plugin means to
+ * keep saying it. Either way, a later pi-ai refresh must not quietly rewrite it.
+ *
+ * The `api` field is the load-bearing one, because **no metadata source
+ * publishes the wire protocol** (models.dev carries one `npm`/`api` pair per
+ * provider, which cannot separate the three endpoints this subscription spans).
+ * The rest is a fallback for the day models.dev stops listing the model:
  *
  *   `input`  — models.dev normally decides (see `inputFor`); `deepseek-flash` is
  *              the one entry that still relies on this declaration.
@@ -385,25 +466,61 @@ function inputFor(id, declared) {
 	return declared;
 }
 
-/** One model's resolved facts: the catalog knows it, or EXTRA_MODELS does. */
+/**
+ * Fields this plugin owns outright, for models the installed catalog also
+ * describes.
+ *
+ * The generator spells every field out so nothing depends on catalog
+ * inheritance — but that cuts both ways: a pi-ai refresh then silently rewrites
+ * values this plugin already shipped. Two of those are not metadata at all.
+ *
+ *   maxTokens  dsh turns a maxTokens written in CONFIGURATION into that model's
+ *              per-request `max_tokens` default (`configuredMaxTokens` in
+ *              dsh-llm-pi-ai's resolver), so a catalog bump re-budgets every
+ *              session. For `deepseek-v4.1-flash` that is worse than a
+ *              re-budget: a runaway reasoning phase can spend the WHOLE cap, so
+ *              the catalog's 384000 is three times the damage of the 131072
+ *              shipped here — the very failure this plugin is being fixed for.
+ *   name       `glm-5.3-flash` bills at 2x usage, which this plugin's label
+ *              says and the catalog's does not.
+ *
+ * A model with a full hand-written declaration in {@link EXTRA_MODELS} needs no
+ * entry here: those are consulted first. Anything absent follows the catalog.
+ */
+const PINNED_FIELDS = {
+	'glm-5.3-flash': { name: 'GLM-5.3-Flash (2x usage)' },
+};
+
+/**
+ * One model's resolved facts.
+ *
+ * A hand-written declaration WINS over the installed catalog. The ordering is
+ * deliberate, and it is the reverse of the first version, which consulted the
+ * catalog first and treated `EXTRA_MODELS` as a fallback for what pi-ai did not
+ * describe. A model added here because the installed catalog was behind gets
+ * picked up by pi-ai eventually — and the moment that happens the plugin's own
+ * declaration (its label, its window, its reasoning map, its per-request
+ * budget) would be silently replaced by upstream metadata nobody reviewed.
+ */
 function facts(id) {
-	const base = piAi.get(id);
-	if (base !== undefined) {
-		return {
-			api: base.api,
-			name: base.name,
-			contextWindow: base.contextWindow,
-			maxTokens: base.maxTokens,
-			input: inputFor(id, base.input),
-			// pi-ai treats a MISSING map as "every level", so spell that out here
-			// too: leaving it to inheritance is what silently dropped the selector.
-			thinkingLevelMap: base.thinkingLevelMap ?? ALL_LEVELS,
-			inherited: true,
-		};
-	}
+	const pinned = PINNED_FIELDS[id] ?? {};
 	const extra = EXTRA_MODELS[id];
-	if (extra === undefined) throw new Error(`no declaration for gateway model "${id}"; add it to EXTRA_MODELS`);
-	return { ...extra, input: inputFor(id, extra.input), inherited: false };
+	if (extra !== undefined) {
+		return { ...extra, ...pinned, input: inputFor(id, extra.input), inherited: false };
+	}
+	const base = piAi.get(id);
+	if (base === undefined) throw new Error(`no declaration for gateway model "${id}"; add it to EXTRA_MODELS`);
+	return {
+		api: base.api,
+		name: pinned.name ?? base.name,
+		contextWindow: pinned.contextWindow ?? base.contextWindow,
+		maxTokens: pinned.maxTokens ?? base.maxTokens,
+		input: inputFor(id, base.input),
+		// pi-ai treats a MISSING map as "every level", so spell that out here
+		// too: leaving it to inheritance is what silently dropped the selector.
+		thinkingLevelMap: pinned.thinkingLevelMap ?? base.thinkingLevelMap ?? ALL_LEVELS,
+		inherited: true,
+	};
 }
 
 const resolved = new Map(ids.map((id) => [id, facts(id)]));
@@ -434,9 +551,7 @@ function protocolFor(id) {
 	return PROTOCOL_FIXES.get(id) ?? resolved.get(id).api;
 }
 
-const unknownProtocols = [...new Set(ids.map(protocolFor))].filter(
-	(api) => !ROUTES.some((route) => route.api === api),
-);
+const unknownProtocols = [...new Set(ids.map(protocolFor))].filter((api) => ROUTE_BY_PROTOCOL[api] === undefined);
 if (unknownProtocols.length > 0) {
 	throw new Error(`models resolved onto protocols with no route: ${unknownProtocols.join(', ')}`);
 }
@@ -446,13 +561,19 @@ for (const [id, api] of PROTOCOL_FIXES) {
 	if (declared !== undefined && declared !== api) console.log(`  protocol corrected: ${id} ${declared} → ${api}`);
 }
 
-/** Group the catalog by protocol; every route is one protocol's slice. */
+// A reassignment naming a route that does not exist would silently drop the
+// model from every route, and the empty-route check below would then blame the
+// wrong thing.
+const unknownRoutes = [...new Set(ids.map(routeIdFor))].filter((routeId) => !ROUTES.some((route) => route.id === routeId));
+if (unknownRoutes.length > 0) {
+	throw new Error(`models assigned to routes that do not exist: ${unknownRoutes.join(', ')}`);
+}
+
+/** Group the catalog by route: a model's protocol picks its route unless reassigned. */
 const grouped = ROUTES.map((route) => ({
 	...route,
-	models: ids.filter((id) => protocolFor(id) === route.api),
+	models: ids.filter((id) => routeIdFor(id) === route.id),
 }));
-const ungrouped = ids.filter((id) => !ROUTES.some((route) => route.api === protocolFor(id)));
-if (ungrouped.length > 0) throw new Error(`models on no configured protocol: ${ungrouped.join(', ')}`);
 if (grouped.some((route) => route.models.length === 0)) {
 	throw new Error(`a route resolved no models: ${grouped.map((route) => `${route.id}=${route.models.length}`).join(' ')}`);
 }
@@ -543,20 +664,28 @@ async function assertPageRoutesAgree() {
 /** Every fact is spelled out, so nothing depends on catalog inheritance. */
 function routeYaml(route, indent) {
 	const pad = ' '.repeat(indent);
-	return [
+	const lines = [
 		`${pad}${route.id}:`,
 		`${pad}  displayName: ${route.displayName}`,
 		`${pad}  api: ${route.api}`,
 		`${pad}  baseURL: ${route.baseURL}`,
 		`${pad}  apiKeyEnv: OPENCODE_API_KEY`,
-		// The route's default effort: it removes the picker's "provider default"
-		// entry on every model that supports the level (see DEFAULT_REASONING).
-		`${pad}  reasoning: ${route.reasoning}`,
-		`${pad}  headers:`,
-		`${pad}    x-opencode-session: ${SESSION}`,
-		`${pad}  models:`,
-		...route.models.map((id) => modelYaml(id, indent + 2)),
-	].join('\n');
+	];
+	// Optional. The route's default effort is what removes the picker's
+	// "provider default" entry on every model that supports the level (see
+	// DEFAULT_REASONING); the flash route leaves it out on purpose, because that
+	// entry is the bare `thinking:{type:"disabled"}` request — the one shape
+	// measured to actually stop this gateway from thinking.
+	if (route.reasoning !== undefined) lines.push(`${pad}  reasoning: ${route.reasoning}`);
+	// Optional. A route id pi-ai does not ship inherits no compat at all, so the
+	// block it would have inherited from the catalog is written out instead.
+	if (route.compat !== undefined) {
+		lines.push(`${pad}  compat:`);
+		for (const [field, value] of Object.entries(route.compat)) lines.push(`${pad}    ${field}: ${value}`);
+	}
+	lines.push(`${pad}  headers:`, `${pad}    x-opencode-session: ${SESSION}`, `${pad}  models:`);
+	lines.push(...route.models.map((id) => modelYaml(id, indent + 2)));
+	return lines.join('\n');
 }
 
 /**
@@ -569,6 +698,15 @@ function routeYaml(route, indent) {
  */
 function assertDefaultReasoningUsable() {
 	for (const route of grouped) {
+		// A route with no default effort is not a gap: its models keep the picker's
+		// "provider default" entry, and that entry is the request this route exists
+		// to send (see `opencode-go-flash`).
+		if (route.reasoning === undefined) {
+			console.log(
+				`  ${route.id.padEnd(24)} default=none: ${route.models.length}/${route.models.length} models (picker keeps "provider default")`,
+			);
+			continue;
+		}
 		const supported = (id) => {
 			const wire = (resolved.get(id).thinkingLevelMap ?? {})[route.reasoning];
 			return wire !== undefined && wire !== null;
@@ -596,9 +734,23 @@ const generatedBlock = [
 	'      # <<< generated',
 ].join('\n');
 const source = readFileSync(patchPath, 'utf8');
-const marker = / {6}# >>> generated[^\n]*\n(?:.*\n)*? {6}# <<< generated/;
+/**
+ * The generated block, located by its own markers.
+ *
+ * Line endings are MATCHED rather than assumed. This checkout has
+ * `core.autocrlf` in play, so the document on disk is CRLF while every template
+ * in this file is LF; the first version pinned `\n` in the pattern and so could
+ * not find its own markers on a CRLF checkout at all. Anchors are used instead
+ * of newline literals, which is also why the trailing marker needs no `\r`.
+ */
+const marker = /^ {6}# >>> generated[^\r\n]*\r?\n[\s\S]*?^ {6}# <<< generated/m;
 if (!marker.test(source)) throw new Error('could not find the generated block in cordis.patch.yml');
-const next = source.replace(marker, generatedBlock);
+/** Whatever the document already uses, so a rewrite never mixes endings. */
+const newline = source.includes('\r\n') ? '\r\n' : '\n';
+const block = newline === '\n' ? generatedBlock : generatedBlock.replaceAll('\n', newline);
+// A function replacement keeps `$&`/`$1` inside the YAML from being read as
+// replacement patterns.
+const next = source.replace(marker, () => block);
 
 const settingsBlock = ['llm-pi-ai:', '  providers:', ...generatedBlock.split('\n').map((line) => (line.length === 0 ? line : `  ${line}`))].join(
 	'\n',
@@ -625,7 +777,10 @@ function syncSettings() {
 		console.log(`note: ${settingsPath} not found — skipping the settings sync`);
 		return;
 	}
-	const lines = current.split('\n');
+	// Split on either ending: a CRLF document would otherwise leave `\r` on every
+	// line, and the exact `'llm-pi-ai:'` comparison below would never match — so
+	// the section would be appended a second time instead of replaced.
+	const lines = current.split(/\r?\n/);
 	const start = lines.findIndex((line) => line === 'llm-pi-ai:');
 
 	// The section runs to the next top-level key (or EOF).
@@ -677,7 +832,10 @@ if (check) {
 	 * changing a single id — and an id-only check would report "in sync" while
 	 * the plugin still described the previous capabilities.
 	 */
-	const actualBlock = marker.exec(source)?.[0];
+	// Normalized to LF before comparing: the document may be CRLF on disk while
+	// the freshly generated block never is, and an ending-only difference is not
+	// staleness.
+	const actualBlock = marker.exec(source)?.[0]?.replaceAll('\r\n', '\n');
 	const blockStale = actualBlock !== generatedBlock;
 	const declared = declaredIds(patchPath);
 	// `syncSettings()` skips a missing document, so the check must not demand one:

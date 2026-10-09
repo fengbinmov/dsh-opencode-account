@@ -75,16 +75,6 @@
             off:
             high: high
             max: max
-        - id: deepseek-v4.1-flash
-          name: DeepSeek V4.1 Flash
-          contextWindow: 1000000
-          maxTokens: 131072
-          input: ['text', 'image']
-          reasoningEfforts:
-            off:
-            low: low
-            high: high
-            max: max
         - id: glm-5.2
           name: GLM-5.2
           contextWindow: 1000000
@@ -380,6 +370,31 @@
             minimal: minimal
             low: low
             medium: medium
+            high: high
+            max: max
+      opencode-go-flash:
+        displayName: OpenCode Go (Flash)
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/go/v1
+        apiKeyEnv: OPENCODE_API_KEY
+        compat:
+          supportsStore: false
+          supportsDeveloperRole: false
+          supportsStrictMode: true
+          maxTokensField: max_tokens
+          requiresReasoningContentOnAssistantMessages: true
+          thinkingFormat: deepseek
+        headers:
+          x-opencode-session: 7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40
+        models:
+        - id: deepseek-v4.1-flash
+          name: DeepSeek V4.1 Flash
+          contextWindow: 1000000
+          maxTokens: 131072
+          input: ['text', 'image']
+          reasoningEfforts:
+            off:
+            low: low
             high: high
             max: max
       # <<< generated
