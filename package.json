@@ -1,6 +1,6 @@
 {
     "name": "dsh-opencode-account",
-    "version": "0.1.5",
+    "version": "0.1.6",
     "private": true,
     "description": "OpenCode (opencode.ai) account page for DeepSeek Harness: Go / Go Plus quota windows, Console spend & budget report, per-model usage allowance derived from the official price table, and the live model catalog — under Settings → OpenCode.",
     "keywords": [

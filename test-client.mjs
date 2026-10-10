@@ -317,6 +317,18 @@ function expect(label, haystack, needles) {
 	}
 }
 
+/**
+ * The page keeps every explanatory sentence in a `title` tooltip instead of a
+ * paragraph, so those strings are asserted against the collected props rather
+ * than against the visible text.
+ */
+function expectTitle(label, collected, needles) {
+	const titles = collected.map((entry) => (typeof entry.title === 'string' ? entry.title : '')).join(' ');
+	for (const needle of needles) {
+		if (!titles.includes(needle)) throw new Error(`${label}: no tooltip contains ${JSON.stringify(needle)}`);
+	}
+}
+
 const loading = render('loading', { status: 'loading', data: undefined, error: undefined });
 expect('loading', loading.text, ['正在读取账户信息']);
 
@@ -340,10 +352,9 @@ expect('ready', ready.text, [
 	'来源：Console 用量导出',
 	'未设上限',
 	'预算重置',
-	'为什么没有“余额”数字',
 	'模型目录',
 	'deepseek-v4-flash',
-	'月额度 $60.00',
+	'$60.00/月',
 	'剩余 $59.89',
 	'不限量',
 	'未收录额度',
@@ -355,6 +366,9 @@ expect('ready', ready.text, [
 	'video',
 	'pdf',
 ]);
+// The "no balance endpoint" explanation is a tooltip now — the visible page is
+// labels and numbers only.
+expectTitle('ready', ready.props, ['为什么没有“余额”数字']);
 // A light user's window is NOT zero: the exact percentage must survive (the
 // gateway's /usage would have rounded 0.141% down to a flat 0).
 const monthlyBar = ready.props.find((entry) => entry.role === 'progressbar' && entry['aria-label'] === '每月');
@@ -417,10 +431,10 @@ expect('english', english.text, [
 	'OpenCode account',
 	'Usage quota',
 	'Spend & allowance',
-	'Why there is no “balance” number',
 	'Model catalog',
 	'Go Plus $40/month',
 	'current plan',
 ]);
+expectTitle('english', english.props, ['Why there is no “balance” number']);
 
 console.log('\nall render branches OK');
