@@ -36,10 +36,10 @@
 
 | 面 | 做法 |
 |---|---|
-| **模型 provider** | 以 pi-ai 内置 `opencode-go` 目录为元数据来源，按你的套餐补全成 **30 个模型**；拆成 **4 条路由**（3 条按协议 + 1 条为单个模型的安全默认，见下） |
+| **模型 provider** | 以 pi-ai 内置 `opencode-go` 目录为元数据来源，按你的套餐补全成 **38 个模型**；按协议拆成 **3 条路由**（见下） |
 | **账户页** | 插件在 host 注册 `GET /opencode/account`，浏览器页只读这个接口；**API key 永不进浏览器**（只回掩码） |
 
-### 为什么是 4 条路由
+### 为什么是 3 条路由
 
 **前 3 条：协议不同。** 两个约束是从 dsh-llm-pi-ai 的解析器里读出来的，不是推测：
 
@@ -49,34 +49,43 @@
    只能靠**路由级**的 `api` 拿到协议。
 2. **一条路由只能有一个 `api`**。
 
-你的 Go 套餐 30 个模型跨三种协议，于是先拆成三条（同一个 key、同一组 headers）：
+你的 Go 套餐 38 个模型跨三种协议，于是先拆成三条（同一个 key、同一组 headers）：
 
 | 路由 | 协议 | 模型数 | 网关端点 |
 |---|---|---|---|
-| `opencode-go` | `openai-completions` | 20 | `/chat/completions` |
+| `opencode-go` | `openai-completions` | 28 | `/chat/completions` |
 | `opencode-go-responses` | `openai-responses` | 6 | `/responses` |
-| `opencode-go-messages` | `anthropic-messages` | 3 | `/messages` |
-| `opencode-go-flash` | `openai-completions` | 1 | `/chat/completions` |
+| `opencode-go-messages` | `anthropic-messages` | 4 | `/messages` |
 
-（`opencode-go-messages` 之所以有 3 个而不是 2 个，是因为 `minimax-m2.7` 的协议被实测纠正过来了 —— 见下文。）
+（`opencode-go-messages` 之所以有 4 个而不是 3 个，是因为 `minimax-m2.7` 的协议被实测纠正过来了、
+`claude-haiku-5-5` 两个 OpenAI 协议都报 `ModelProtocolUnsupported` 而只认 `messages` —— 见下文。
+三条就是全部：协议是**路由级**字段，所以一个跨三种协议的套餐只能这样拆，不能再少。）
 
-**第 4 条不是协议问题，是默认档位问题。** `opencode-go-flash` 与 `opencode-go` 同协议、同端点，
-只为 `deepseek-v4.1-flash` 一个模型存在：它**不能继承路由级默认档位**（`reasoning` 是路由级
-字段，per-model 没有对应项），而「有默认档位」正是它失控的前提 —— 原因见
-「[为什么 `deepseek-v4.1-flash` 单独一条路由](#为什么-deepseek-v41-flash-单独一条路由)」。
-
-> **选择器里会出现四个 OpenCode Go 条目**（`OpenCode Go` / `OpenCode Go (Responses)` /
+> **选择器里会出现三个 OpenCode Go 条目**（`OpenCode Go` / `OpenCode Go (Responses)` /
 > `OpenCode Go (Messages)` / `OpenCode Go (Flash)`）。这是当前 DSH 配置形状的硬约束，
 > 不是设计偏好。
 
 ### 为什么模型清单要自己维护
 
-pi-ai 内置目录与线上套餐会漂移。2026-09-28 实测：
+pi-ai 内置目录与线上套餐会漂移，而且**两个方向都漂**。两次实测：
+
+**2026-09-28（当时网关 30 个）：**
 
 - 内置目录只有 **27** 个，比网关**少 8 个**：`gpt-6-luna`、`grok-4.7`、`deepseek-v4.1-flash`、
   `deepseek-flash`、`mimo-v2.6-flash`、`mimo-v2.6-pro`、`space-bunny-free`、
   `longcat-2.5-preview-free` —— 这些在 Models 页面里**根本选不到**；
-- 还多带 **5 个已下线**的 id：`glm-5.1`、`kimi-k2.6`、`omen-alpha`、`qwen3.6-plus`、`qwen3.7-max`。
+- 还多带 **5 个当时已下线**的 id：`glm-5.1`、`kimi-k2.6`、`omen-alpha`、`qwen3.6-plus`、`qwen3.7-max`。
+
+**2026-10（网关 38 个）：**
+
+- 上面那 5 个「已下线」的 id **又全部上线了** —— 目录多带一个 id，不代表它永久消失，也不代表
+  网关不会把它放回来；
+- 新增目录里没有的：`claude-haiku-5-5`、`step-5-preview-free`，以及**替换掉** `space-bunny-free`
+  的 `space-bunny`（两者**不是同一个模型**：后者计费 $0.15/$0.60）；
+- `minimax-m2.5` 与 `omen-alpha` 两个元数据源**都没有**，只能手写声明（`window-unverified`）；
+- pi-ai 目录这时也涨到了 30 个，但它的**档位表开始出错** —— 见上文「推理等级」。
+
+所以清单**必须**按网关对齐，不能靠目录，也不能靠上一次的记录。
 
 清单由脚本对齐（可随时重跑）：
 
@@ -140,11 +149,13 @@ node scripts/probe-protocol.mjs    # 逐个验证；有分歧时打印要加进 
 这样做的原因：探测的完整输出是"24 行与声明一致 + 1 行修正"，只有修正值得留 ——
 那是一个常量，不是一个需要入库的产物。
 
-> **附带发现**：在你当前工作区，`gpt-6-luna` / `gpt-5.6-luna` 报
-> `403 unsupported_country_region_territory`，`grok-4.6` / `grok-4.7` 报
-> `Endpoint is unavailable`，`muse-spark-1.2/1.3` 需要先在控制台允许 paid endpoints。
-> 这是 provider 侧的可用性（多半与工作区隐私区域设置有关），**不是配置问题**，
-> 但意味着这几个模型现在选它们会失败。
+> **附带发现（2026-10 复测）**：`muse-spark-1.2-contributor` / `muse-spark-1.3-contributor` 报
+> `403 RegionError: This model is not available in your country` —— provider 侧的可用性
+> （与工作区的区域设置有关），**不是配置问题**，但意味着现在选它们会失败。
+>
+> 2026-09 曾记录 `gpt-6-luna` / `gpt-5.6-luna` 报 `403 unsupported_country_region_territory`、
+> `grok-4.6` / `grok-4.7` 报 `Endpoint is unavailable`；**这四个在 2026-10 的端到端复测里
+> 全部恢复**，都返回 `finish=stop`。
 
 #### 已删除：图像探测
 
@@ -193,9 +204,65 @@ node scripts/probe-protocol.mjs    # 逐个验证；有分歧时打印要加进 
 所以 dsh 只允许 `off` 留空，其余等级留空会直接报
 `reasoningEfforts.minimal needs the wire value dispatch should send`。
 
+#### 但这张表本身会错 —— 两个方向都会
+
+2026-10 逐个打网关实测，发现 pi-ai 目录的档位表**既会低估也会高估**：
+
+| 模型 | pi-ai 目录说 | 网关实测接受 |
+|---|---|---|
+| `qwen3.8-max` | low / medium / xhigh | **全部六档**（含 `high`） |
+| `kimi-k3` | 只有 `max` | **全部六档** |
+| `kimi-k2.6` | map 全是 `null`（一档都没有） | **全部六档** |
+| `qwen3.6-plus` | map 缺失 → 被当成「全档」 | low/medium/high/xhigh（**拒绝 `minimal`、`max`**） |
+| `qwen3.7-max` | map 缺失 → 被当成「全档」 | minimal…xhigh（**拒绝 `max`**） |
+
+**低估不是「少一个选项」，而是「这个模型完全不可用」。** 路由级默认档位在**请求路径**上按这张表
+校验：
+
+```js
+// dsh-llm-pi-ai/lib/index.js:1851
+const reasoning = resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning);
+```
+
+调用方不传档位时，它直接拿**路由默认值**去查表，查不到就抛 `UNSUPPORTED_REASONING_EFFORT`。
+于是 `qwen3.8-max` 与 `kimi-k3` 曾经**每一次请求都失败**
+（`does not support reasoning effort "high"`）—— 而网关其实完全接受 `high`。
+
+**高估则给出网关明确拒绝的选项**：pi-ai 把「map 缺失」读成「全部档位」，所以
+`qwen3.6-plus` / `qwen3.7-max` 的选择器里会出现 `max`，选中即 `400 invalid_parameter_error`。
+
+所以生成器带一张 `PINNED_FIELDS`，把**实测**结果钉在这几个模型上 —— 网关是唯一权威，两个
+元数据源都在这几项上出错。复测：
+
+```sh
+node scripts/probe-protocol.mjs   # 协议归属（claude-haiku-5-5 只认 messages 就是这么发现的）
+node scripts/probe-effort.mjs     # 每个模型真实接受的档位集合
+```
+
+**还有一处不是「档位」而是「形态」的问题。** `claude-haiku-5-5` 的 `messages` 端点**拒绝**
+基于预算的 thinking：
+
+```
+"thinking.type.enabled" is not supported for this model.
+Use "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.
+```
+
+pi-ai 只在 `compat.forceAdaptiveThinking` 置位时才发 adaptive 形态，所以这个模型带了一个
+per-model `compat`（生成器的 `modelYaml` 因此支持输出它）：
+
+```yaml
+        - id: claude-haiku-5-5
+          compat:
+            forceAdaptiveThinking: true
+```
+
+置位后线上请求体变成 `thinking:{type:"adaptive",display:"summarized"}` +
+`output_config:{effort:"high"}`，网关回 200。**不加它，这个模型的每一次推理请求
+（含路由默认的 `high`）都会 400。**
+
 pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位的模型只回 `['off']`，
 而**目录里没有描述的模型（也就是新补的那 8 个）正是这种情况** —— 于是它们的推理等级
-选择器整个不出现。所以生成器现在给全部 30 个模型显式写出 `reasoningEfforts`：
+选择器整个不出现。所以生成器现在给全部 38 个模型显式写出 `reasoningEfforts`：
 
 ```yaml
         - id: gpt-6-luna
@@ -247,57 +314,38 @@ pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位�
 需要注意的隐患：上游**一旦开始执行** `thinking:disabled`，选 `default` 或 `Off` 的会话会
 **突然失去思考能力**。
 
-### 已经把它默认成 `High`（消除那个坑）
+### 默认档位：三条路由都不带
 
-前三条路由带一个路由级默认（第 4 条 `opencode-go-flash` **刻意不带**，理由见下一节）：
+早期版本给每条路由写了一个路由级默认（`reasoning: high`），理由是"它的支持面最广"。**那个
+做法是错的，而且错得很隐蔽**：
 
-```yaml
-      opencode-go:
-        reasoning: high        # ← 用户没选档位时用它，而不是"提供方默认"
+```js
+// dsh-llm-pi-ai/lib/index.js:1851
+const reasoning = resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning);
 ```
 
-效果：dsh 会为每个**支持该档位**的模型发布 `defaultEffort`，选择器里那个
-"提供方默认"条目随之消失，默认直接落在 `High`（仍然是可改的，`Off`/`Low`/`Max` 照常可选）。
+调用方不传档位时，它**直接拿路由默认值**去查该模型的档位表，**不先问模型是否支持**。所以
+路由默认档位是**该路由上每个模型的硬要求**——一个不支持的模型不是"少一个选项"，而是
+**每一次请求都失败**：
 
-选 `high` 而不是别的，是因为它的**支持面最广**：
+```
+pi-ai provider "opencode-go" model "qwen3.8-max" does not support reasoning effort "high"
+```
 
-| 档位 | `opencode-go` (22) | responses (6) | messages (2) |
-|---|---|---|---|
-| `low` | 18 | 6 | 2 |
-| `medium` | **11** | 6 | 2 |
-| **`high`** | **20** | **6** | **2** |
-| `max` | 19 | 3 | 2 |
+`qwen3.8-max` 与 `kimi-k3` 就是这样（pi-ai 的档位表漏报了它们的 `high`，见上文）。而 Go 套餐里
+**没有任何档位被全部模型支持**（`high` 只有 18/20，`low` 18/22……），唯一全覆盖的 `off` 含义是
+「不要思考」。
 
-**27/30 个模型因此拿到默认档位**；`kimi-k3`（只支持 `off`/`max`）、`qwen3.8-max`（不支持
-`high`）与 `deepseek-v4.1-flash`（刻意不给，见下一节）保留"提供方默认"条目。
+所以三条路由**都不写 `reasoning`**：每个模型落在选择器的「提供方默认」条目上，而那个条目发出的
+正是**没有 effort 的 disabled 请求**——默认不思考，想思考时 `Off`/`Low`/`High`/`Max` 照常可选。
 
-> ⚠️ **但前两个模型实际不可用 —— 这是本次排查中发现的既有缺陷。** 旧版文档（以及生成器的
-> 断言）依据 dsh 的 `describableReasoningLevel` 认为"不支持的模型不会报错"；**那只在描述层
-> 成立**，请求路径走的是另一条分支：
->
-> ```js
-> // dsh-llm-pi-ai/lib/index.js:1851
-> const reasoning = resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning);
-> ```
->
-> 调用方不传档位时，它**直接拿路由默认值**去校验，不先问该模型是否支持，于是抛
-> `UNSUPPORTED_REASONING_EFFORT`。实测 `qwen3.8-max` 与 `kimi-k3` 现在**每次请求都直接失败**：
->
-> ```
-> pi-ai provider "opencode-go" model "qwen3.8-max" does not support reasoning effort "high"
-> ```
->
-> 生成器只断言"每条路由**至少有一个**模型支持该默认值"，所以这条不一致它看不出来。
-> 干净的修法是**路由默认档位必须被该路由上每个模型支持，否则就不给默认**。本次只处理了
-> `deepseek-v4.1-flash`（它单独成路由，本来就没有默认），这两个待定。
+> 这同时消掉了第 4 条路由。`opencode-go-flash` 当初只是为了给 `deepseek-v4.1-flash` 一条
+> **没有默认档位**的路由而存在；既然现在每条路由都没有默认，它就没有什么可说的了。
 
-代价要清楚：**默认从此是 `High`**，比"网关默认"更费 thinking token。想改就改生成器里的
-`DEFAULT_REASONING` 再重跑，或直接在 `settings.yaml` 里改 `reasoning:`。
+### 为什么默认是「不思考」
 
-### 为什么 `deepseek-v4.1-flash` 单独一条路由
-
-因为它会**推理失控**：把整个输出预算烧在思考里，一个 token 都不留给正文或工具调用 ——
-表现就是「只想不做」，推理里短句轮转（`好。执行。好。发。`），然后停不下来。
+因为 `deepseek-v4.1-flash` 会**推理失控**：把整个输出预算烧在思考里，一个 token 都不留给正文
+或工具调用——表现就是「只想不做」，推理里短句轮转（`好。执行。好。发。`），然后停不下来。
 这是上游模型/网关的缺陷，opencode 有多个 issue，其中
 [#44962](https://github.com/anomalyco/opencode/issues/44962) 点名的正是这个模型和
 `好。发。好。发。` 这个形态；同一模型在别的 provider 上一样复现（本机 `commandcode` 的一次
@@ -316,33 +364,29 @@ pi-ai 还有个陷阱：`getSupportedThinkingLevels` 对 `reasoning` 未置位�
 | `thinking.budget_tokens` / `thinking_token_budget` | 2300+ | ❌ 字段被忽略 |
 | `temperature` / `top_p` / 惩罚项 | — | ❌ 思考模式下无效，且 dsh 的 schema 根本不接受 |
 
-也就是说：**唯一能真正关掉思考的形态是「没有任何 effort 的 disabled 请求」**，而路由级
-`reasoning` 默认值恰好**总会**带上一个 effort（见上文那条
-`options.reasoningEffort ?? profile.reasoning`）。
-
-所以这个模型被放进一条**不带 `reasoning` 的路由**：选择器回到「提供方默认」，而那个条目发出的
-正是「没有 effort 的 disabled 请求」，失控的入口就此关闭。想思考时 `Off`/`Low`/`High`/`Max`
-照常可选，只是**不再有默认档位**。
+**唯一能真正关掉思考的形态，是「没有任何 effort 的 disabled 请求」**——而路由级 `reasoning`
+默认值恰好**总会**带上一个 effort。这就是为什么默认档位必须去掉，而不是换个值。
 
 实测对比（真实网关、经 dsh 适配器、同一个难题）：
 
 | 配置 | reasoning | 正文 | finish |
 |---|---|---|---|
-| `opencode-go-flash`，**不选档位**（新默认） | **0 字符** | 3735 字符 | `stop` ✅ |
-| `opencode-go-flash`，显式 `High` | 8858 字符 | 0 字符 | `max-tokens` ❌ |
-| `opencode-go` / `deepseek-v4-flash`，`High`（对照） | 34189 字符 | 3864 字符 | `stop` ✅ |
+| 不选档位（现在的默认） | **0 字符** | 3735 字符 | `stop` ✅ |
+| 显式 `High` | 8858 字符 | 0 字符 | `max-tokens` ❌ |
+| `deepseek-v4-flash` + `High`（对照） | 34189 字符 | 3864 字符 | `stop` ✅ |
 
-两个实现细节都不是可选的：
+两个实现细节仍然成立：
 
-- **这条路由必须显式写 `compat`。** pi-ai 的目录按 **provider id** 查
-  （`resolveRouteModels` 里的 `catalogModels(provider)`），`opencode-go-flash` 不是它认识的
-  provider，于是**什么都继承不到**。缺了 `compat`，pi-ai 会按 baseURL 猜成「就当它是 OpenAI」，
-  **根本不发 `thinking` 字段** —— 而网关收不到 `disabled` 就默认思考（实测 4.6k 字符推理），
-  正好是这个路由要防的那件事。
 - **`maxTokens` 钉在 131072。** dsh 把配置里写的 `maxTokens` 变成该模型**每请求的
-  `max_tokens` 默认上限**（`configuredMaxTokens`），而 pi-ai 目录现在把这个模型标成 384000：
+  `max_tokens` 默认上限**（`configuredMaxTokens`），而 pi-ai 目录把这个模型标成 384000：
   真放过去，一次失控能烧的额度就是三倍。生成器因此改成**手写声明优先于目录**
   （`EXTRA_MODELS` 与 `PINNED_FIELDS`），上游刷新不会悄悄改写插件已发布的字段。
+- **`responses` 协议表达不了「不思考」。** 它总是发 `reasoning.effort`，map 里没有 `off` 时
+  回落到字面量 `"none"`（`openai-responses.js:261`）——而 dsh 只能把 `off` 写成**空值键**，
+  pi-ai 把它变成**缺失**的 `off`（不是 `null`）。于是 `grok-4.6`/`grok-4.7` 收到
+  `effort:"none"` 并回 `400 This model does not support reasoning_effort value none`。
+  实测这两个端点接受 `minimal`/`low`/`medium`/`high`/`xhigh`（拒绝 `none` 与 `max`），
+  所以它们的 `off` 映射到 `minimal`——保住每次请求有效，也保住档位选择器。
 
 ### 会话头
 
@@ -473,7 +517,7 @@ dsh plugin --profile web add "<插件目录>"
 
 然后 `cd "$DSH_HOME/profiles/web" && pnpm install`，**重启 dsh**。
 
-装完在 **设置 → OpenCode** 就能看到页面；**设置 → Models** 里会出现四条 OpenCode Go 路由。
+装完在 **设置 → OpenCode** 就能看到页面；**设置 → Models** 里会出现三条 OpenCode Go 路由。
 
 ### 3. 在别的设备 / 给别人用
 
@@ -482,7 +526,7 @@ dsh plugin --profile web add "<插件目录>"
 | 需要改的 | 说明 |
 |---|---|
 | `OPENCODE_API_KEY` | **唯一必需项**。每台设备填自己的 key（可以是同一个 key，也可以是不同账号的） |
-| 模型提供方 | **不用配**。四条 OpenCode Go 路由随插件的 bundle 层提供，装完即出现在 **设置 → Models**（`test-config.mjs` 断言了这四个条目及其显示名） |
+| 模型提供方 | **不用配**。三条 OpenCode Go 路由随插件的 bundle 层提供，装完即出现在 **设置 → Models**（`test-config.mjs` 断言了这三个条目及其显示名） |
 | 档位 | **不用配**。页面从 `/api/go/status` 读 `product`，Go 与 Go Plus 都会自动认对 |
 | `session` | 默认值可直接用。同一把 key 跑在多台机器上时，建议各给一个 UUID v4，让 prompt 缓存互不干扰 |
 | 模型清单 | 已随包提供（`cordis.patch.yml` + `model-metadata.json`）。想按当时的网关重新对齐就 `node scripts/build-provider-models.mjs` |
@@ -490,10 +534,10 @@ dsh plugin --profile web add "<插件目录>"
 两条已实测的保证：
 
 - **新机器**（`settings.yaml` 里完全没有 `llm-pi-ai` 段）→ 仅靠插件的 bundle 层就能对话，实测返回 `NEWUSER-OK`；
-- **已有别的 pi-ai provider 的机器** → 层叠是**逐键合并**而非整段替换：你的 `acme-gateway` 与四条 OpenCode Go 路由共存，实测返回 `LAYER-OK`。
+- **已有别的 pi-ai provider 的机器** → 层叠是**逐键合并**而非整段替换：你的 `acme-gateway` 与三条 OpenCode Go 路由共存，实测返回 `LAYER-OK`。
 
 > **你已有的 `llm-pi-ai` 配置不会被覆盖**。`settings.yaml` 的优先级高于插件的 bundle 层，
-> 所以脚本会把四条 OpenCode Go 路由**合并**进你的 `providers`，其余 provider 与文件其他部分
+> 所以脚本会把三条 OpenCode Go 路由**合并**进你的 `providers`，其余 provider 与文件其他部分
 > 原样保留（跑的时候会打印 `keeping N unrelated provider(s)`）。
 > 这一点是刻意修的：早期版本会从 `llm-pi-ai:` 一直删到下一个顶层键，等于抹掉别人的配置。
 
@@ -507,11 +551,19 @@ npm test                     # 全部离线检查（不含需要凭据的 live �
 
 ```sh
 node test-client.mjs         # 渲染 loading/就绪/触限/缺密钥/上游失败/权限不足/中英文，并断言设置表单不再出现
-node test-config.mjs         # 让 dsh 自己的适配器加载生成的配置：30/30 可解析、协议修正生效
+node test-config.mjs         # 让 dsh 自己的适配器加载生成的配置：38/38 可解析、协议修正生效
 node test-reasoning.mjs      # 推理等级契约：default ≡ Off，命名档位带 reasoning_effort
 node test-host.mjs           # 真调 opencode.ai：配额/目录/预算/能力，并断言响应体不含完整 key
 node test-host.mjs --offline # 无网络：断言缺凭据时的提示路径
 node scripts/build-provider-models.mjs --check   # 模型清单/能力/协议是否仍与套餐一致
+```
+
+两个**手动**探测（不进 `npm test`，因为它们打真实网关、消耗额度）：
+
+```sh
+node scripts/probe-protocol.mjs                    # 每个模型的协议归属
+node scripts/probe-effort.mjs                      # 每个模型真实接受的档位集合
+PROBE_LEVELS=high node scripts/probe-effort.mjs    # 只问一件事：全部模型都接受路由默认档位吗
 ```
 
 > `test-config.mjs` 是其中最要紧的一个：它驱动 `dsh-llm-pi-ai` 本体去解析
@@ -531,7 +583,7 @@ dsh --profile octest --patch "./.dsh-test/model-overlay.yml" "reply with exactly
 
 已验证的事实（本机实测）：
 
-- `GET http://127.0.0.1:3099/opencode/account` → 200，返回真实账号（形如 `user@example.com`）、30 个模型、30/30 命中额度表、预算报表 1 行；
+- `GET http://127.0.0.1:3099/opencode/account` → 200，返回真实账号（形如 `user@example.com`）、38 个模型、32 个命中额度表、预算报表 1 行；
 - `--dump-config` 显示插件层 patch 了 `@deepseek-ai/dsh-base` 的 `llm-pi-ai` 行，`providers.opencode-go` 带着 `x-opencode-session`；
 - 客户端 bundle 已随启动 payload 下发（含 `id: 'dsh-opencode-account'`）。
 
@@ -542,9 +594,10 @@ dsh --profile octest --patch "./.dsh-test/model-overlay.yml" "reply with exactly
   两者都失败时消费卡退回预算报表口径，并明说权限不足。
 - **每模型的"已用"是真实消费，月额度则来自文档**：官方只按窗口给百分比，所以月额度取自
   [Go 文档](https://opencode.ai/docs/go/) 的静态表；文档未收录的模型标 `未收录额度`。
-- **模型可用性受 provider 侧限制**：实测 `gpt-6-luna` / `gpt-5.6-luna` 报
-  `403 unsupported_country_region_territory`（多半与工作区隐私区域有关，需在 [控制台](https://opencode.ai/auth)
-  设为 Global），`grok-4.6` / `grok-4.7` 报 `Endpoint is unavailable`，`muse-spark-*` 需先允许 paid endpoints。
+- **模型可用性受 provider 侧限制**：2026-10 端到端复测全部 38 个模型，**36 个通过**；只有
+  `muse-spark-1.2-contributor` / `muse-spark-1.3-contributor` 报
+  `403 RegionError: This model is not available in your country`（与工作区的区域设置有关）。
+  2026-09 记录过的 `gpt-6-luna` / `gpt-5.6-luna` / `grok-4.6` / `grok-4.7` 已全部恢复。
 - **pi-ai 目录的价格有 3 处过时**（`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、`glm-5.3-flash`）：
   本插件的价目表与 models.dev 一致，但 DSH 的成本显示走 pi-ai 的目录，而路由配置没有 `cost` 字段可覆盖。
 - **档位与每模型消费都依赖 Console 接口**：读不到 `/api/go/status` 时档位显示"未标注"、

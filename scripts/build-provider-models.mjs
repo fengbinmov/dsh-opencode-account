@@ -86,22 +86,25 @@ const offline = process.argv.includes('--offline');
 const SESSION = '7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40';
 
 /**
- * The reasoning level every route defaults to.
+ * No route carries a default reasoning level, on purpose.
  *
- * A route-level `reasoning` makes dsh publish a `defaultEffort`, which removes
- * the picker's "provider default" entry — and that entry is a trap: it and `Off`
- * are byte-identical (both send `thinking:{type:"disabled"}`), so leaving it
- * selected means "ask for thinking off, then rely on the gateway ignoring it"
- * (measured: it does ignore it today). Naming a level makes the default explicit.
+ * A route-level `reasoning` is a HARD requirement on every model that route
+ * serves: the request path validates it
+ * (`resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning)`)
+ * without first asking whether the model supports it, so a model that cannot
+ * take the route's default fails EVERY request with
+ * UNSUPPORTED_REASONING_EFFORT. Measured 2026-10, pi-ai's tables under-report
+ * enough models (`qwen3.8-max`, `kimi-k3` and `kimi-k2.6` were all listed as
+ * lacking `high` while the gateway accepts every level) that no single level is
+ * safe as a shared default — and the one level every model does accept, `off`,
+ * means "do not think".
  *
- * `high` is chosen because it has the WIDEST support across the Go catalog —
- * 20/22 on `opencode-go`, 6/6 on responses, 2/2 on messages — versus `low` 18/22,
- * `max` 19/22 and `medium` only 11/22. dsh drops the default for a model that
- * cannot take it (`describableReasoningLevel` returns none rather than failing),
- * so the two models without `high` (`kimi-k3`, `qwen3.8-max`) simply keep the
- * "provider default" entry instead of erroring.
+ * Leaving `reasoning` off every route puts each model on the picker's "provider
+ * default" entry, which is the bare `thinking:{type:"disabled"}` request: no
+ * thinking unless a human picks a level. That is also what keeps
+ * `deepseek-v4.1-flash` out of its reasoning runaway (opencode#44962) without a
+ * route of its own — which is why there are three routes here, not four.
  */
-const DEFAULT_REASONING = 'high';
 
 /**
  * Route ids, one per wire protocol. The plain `opencode-go` keeps the name the
@@ -125,59 +128,22 @@ const ROUTES = [
 		api: 'openai-completions',
 		displayName: 'OpenCode Go',
 		baseURL: 'https://opencode.ai/zen/go/v1',
-		reasoning: DEFAULT_REASONING,
 	},
 	{
 		id: 'opencode-go-responses',
 		api: 'openai-responses',
 		displayName: 'OpenCode Go (Responses)',
 		baseURL: 'https://opencode.ai/zen/go/v1',
-		reasoning: DEFAULT_REASONING,
 	},
 	{
 		id: 'opencode-go-messages',
 		api: 'anthropic-messages',
 		displayName: 'OpenCode Go (Messages)',
 		baseURL: 'https://opencode.ai/zen/go',
-		reasoning: DEFAULT_REASONING,
-	},
-	{
-		// A SECOND route on the completions protocol, for exactly one model.
-		//
-		// `deepseek-v4.1-flash` runs its reasoning to the output limit without
-		// ever emitting a tool call — the "thinks but never acts" runaway.
-		// Upstream tracks it (opencode#44962 names this model and the
-		// `好。发。好。发。` fragment rotation). Measured against this gateway:
-		// the runaway is only reachable while a reasoning EFFORT is sent,
-		// because `thinking:{type:"disabled"}` really does stop the thinking —
-		// but only when no `reasoning_effort` rides beside it, and a route-level
-		// default always sends one. So this route deliberately carries NO
-		// `reasoning`: the picker falls back to "provider default", which is the
-		// bare disabled request, and the loop cannot start unless a human
-		// explicitly picks a level.
-		id: 'opencode-go-flash',
-		api: 'openai-completions',
-		displayName: 'OpenCode Go (Flash)',
-		baseURL: 'https://opencode.ai/zen/go/v1',
-		// pi-ai's catalog is keyed by PROVIDER id, so a route id pi-ai does not
-		// ship inherits nothing — not even the compat block every installed
-		// `opencode-go` model carries. Without it pi-ai's baseURL detection
-		// answers "as though it were OpenAI", sends no `thinking` field at all,
-		// and the gateway thinks anyway (measured: 4.6k chars of reasoning, i.e.
-		// the exact runaway this route exists to prevent). Spelled out here so
-		// the route behaves like the catalog entry it stands in for.
-		compat: {
-			supportsStore: false,
-			supportsDeveloperRole: false,
-			supportsStrictMode: true,
-			maxTokensField: 'max_tokens',
-			requiresReasoningContentOnAssistantMessages: true,
-			thinkingFormat: 'deepseek',
-		},
 	},
 ];
 
-/** The route that serves one protocol unless a model is assigned elsewhere. */
+/** The route that serves one protocol. */
 const ROUTE_BY_PROTOCOL = {
 	'openai-completions': 'opencode-go',
 	'openai-responses': 'opencode-go-responses',
@@ -185,23 +151,15 @@ const ROUTE_BY_PROTOCOL = {
 };
 
 /**
- * Models that do NOT ride their protocol's route.
+ * The route serving one model id.
  *
- * The gateway assigns a model's ENDPOINT, which is what a protocol split is
- * for; this is a different split, for a model whose per-model needs cannot be
- * expressed on a shared route. `reasoning` and `compat` are route-level facts,
- * so "this one model must not inherit a default effort" can only be said by
- * giving it a route of its own.
+ * A model's route is its protocol's, and nothing else: the gateway assigns the
+ * endpoint, which is the only thing a split is for. (A fourth route used to sit
+ * here for `deepseek-v4.1-flash`, so that one model could opt out of a route
+ * default. Now that NO route has a default, that route had nothing left to say.)
  */
-const MODEL_ROUTE = new Map([
-	// See the `opencode-go-flash` route above: no default reasoning level, so the
-	// runaway cannot start. `Off`/`Low`/`High`/`Max` stay selectable per session.
-	['deepseek-v4.1-flash', 'opencode-go-flash'],
-]);
-
-/** The route serving one model id, override first. */
 function routeIdFor(id) {
-	return MODEL_ROUTE.get(id) ?? ROUTE_BY_PROTOCOL[protocolFor(id)];
+	return ROUTE_BY_PROTOCOL[protocolFor(id)];
 }
 
 /**
@@ -211,6 +169,16 @@ function routeIdFor(id) {
  * @see https://opencode.ai/docs/go/ — the docs never publish per-model levels.
  */
 const ALL_LEVELS = { off: null, minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', max: 'max' };
+
+/**
+ * The same list plus `xhigh`.
+ *
+ * `ALL_LEVELS` deliberately omits `xhigh`, and that stays true for the entries
+ * that merely mirror pi-ai's "no map means every level" rule. This one is for
+ * tables corrected against the gateway, where the probe answered 200 for
+ * `xhigh` as well (see {@link PINNED_FIELDS}).
+ */
+const ALL_LEVELS_AND_XHIGH = { off: null, minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' };
 
 /** Resolve pi-ai's installed opencode-go catalog, indexed by model id. */
 function piAiCatalog() {
@@ -340,14 +308,66 @@ const EXTRA_MODELS = {
 		input: ['text', 'image'],
 		thinkingLevelMap: ALL_LEVELS,
 	},
-	'space-bunny-free': {
-		api: 'openai-completions',
-		name: 'Space Bunny Free',
-		contextWindow: 131072,
-		maxTokens: 131072,
+	// --- the 2026-10 gateway refresh: nine models the subscription gained ---
+	//
+	// Every `api` below is measured, not read: the three endpoints accept
+	// different subsets and no metadata source publishes the split.
+	'claude-haiku-5-5': {
+		// The only new model on the messages endpoint — both OpenAI protocols
+		// answered `ModelProtocolUnsupported`.
+		api: 'anthropic-messages',
+		name: 'Claude Haiku 5.5',
+		contextWindow: 1000000,
+		maxTokens: 128000,
 		input: ['text', 'image'],
+		// Measured: this endpoint rejects the budget-based thinking form outright
+		// (`"thinking.type.enabled" is not supported for this model. Use
+		// "thinking.type.adaptive" and "output_config.effort"`). pi-ai dispatches
+		// the adaptive form only when this switch is set; without it every
+		// reasoning request — including the route's default `high` — would 400.
+		compat: { forceAdaptiveThinking: true },
+		thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+	},
+	'minimax-m2.5': {
+		api: 'openai-completions',
+		name: 'MiniMax-M2.5',
+		contextWindow: 1000000,
+		maxTokens: 131072,
+		input: ['text'],
 		thinkingLevelMap: ALL_LEVELS,
 		note: 'window-unverified',
+	},
+	'omen-alpha': {
+		api: 'openai-completions',
+		name: 'Omen Alpha',
+		contextWindow: 262144,
+		maxTokens: 65536,
+		input: ['text'],
+		// Measured: this endpoint rejects the `thinking` field outright
+		// (`unknown field "thinking"`) while accepting `reasoning_effort`. pi-ai
+		// already picks the OpenAI-style dispatch for a route id it does not ship,
+		// which sends the effort alone — so this needs no `compat` override, and
+		// the effort-only shape was measured to still produce reasoning.
+		thinkingLevelMap: ALL_LEVELS,
+		note: 'window-unverified',
+	},
+	'space-bunny': {
+		// NOT the same model as the retired `space-bunny-free`: this one is
+		// priced ($0.15/$0.60) and has its own window.
+		api: 'openai-completions',
+		name: 'Space Bunny',
+		contextWindow: 1048576,
+		maxTokens: 524288,
+		input: ['text', 'image'],
+		thinkingLevelMap: ALL_LEVELS,
+	},
+	'step-5-preview-free': {
+		api: 'openai-completions',
+		name: 'Step 5 Preview Free',
+		contextWindow: 1000000,
+		maxTokens: 65536,
+		input: ['text', 'image'],
+		thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high' },
 	},
 };
 
@@ -489,6 +509,38 @@ function inputFor(id, declared) {
  */
 const PINNED_FIELDS = {
 	'glm-5.3-flash': { name: 'GLM-5.3-Flash (2x usage)' },
+	// --- reasoning tables corrected against the gateway (measured 2026-10) ---
+	//
+	// pi-ai's catalog UNDER-reports these, and that is not harmless. A route's
+	// default effort is validated against this table on the request path
+	// (`resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning)`),
+	// so a level the table omits is not merely "unavailable" — it makes EVERY
+	// request for that model fail with UNSUPPORTED_REASONING_EFFORT. The catalog
+	// listed `qwen3.8-max` as low/medium/xhigh, `kimi-k3` as max-only, and
+	// `kimi-k2.6` as offering nothing at all; the gateway answers 200 for all six
+	// levels on all three.
+	//
+	// The last two entries correct the opposite error: pi-ai reads a MISSING map
+	// as "every level", and this gateway rejects `max` on both of them.
+	'qwen3.8-max': { thinkingLevelMap: ALL_LEVELS_AND_XHIGH },
+	'kimi-k3': { thinkingLevelMap: ALL_LEVELS_AND_XHIGH },
+	'kimi-k2.6': { thinkingLevelMap: ALL_LEVELS_AND_XHIGH },
+	'qwen3.6-plus': { thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' } },
+	'qwen3.7-max': { thinkingLevelMap: { minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' } },
+	// The `responses` protocol cannot express "do not think": it always emits
+	// `reasoning.effort`, falling back to the literal `"none"` when the map has no
+	// `off` (`openai-responses.js:261`). dsh can only write `off` as a VALUELESS
+	// key, and pi-ai turns that into an ABSENT `off` — not a `null` one — so these
+	// two were sent `effort:"none"` and answered `400 This model does not support
+	// reasoning_effort value none` on every single request.
+	//
+	// Measured acceptance: `none` and `max` rejected; `minimal`/`low`/`medium`/
+	// `high`/`xhigh`, and omitting the field, all answer 200. Mapping `off` to
+	// `minimal` therefore keeps every request valid while leaving the picker's
+	// levels intact. (`reasoningEfforts: false` would drop the field entirely, but
+	// it also removes the model's reasoning control.)
+	'grok-4.6': { thinkingLevelMap: { off: 'minimal', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' } },
+	'grok-4.7': { thinkingLevelMap: { off: 'minimal', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' } },
 };
 
 /**
@@ -519,6 +571,10 @@ function facts(id) {
 		// pi-ai treats a MISSING map as "every level", so spell that out here
 		// too: leaving it to inheritance is what silently dropped the selector.
 		thinkingLevelMap: pinned.thinkingLevelMap ?? base.thinkingLevelMap ?? ALL_LEVELS,
+		// Only a PINNED compat is written: the catalog's own block stays inherited
+		// rather than being copied into the file, so a pi-ai refresh still reaches
+		// these models.
+		...(pinned.compat === undefined ? {} : { compat: pinned.compat }),
 		inherited: true,
 	};
 }
@@ -590,6 +646,15 @@ function modelYaml(id, indent) {
 		`${pad}  input: [${fact.input.map((value) => `'${value}'`).join(', ')}]`,
 	];
 	lines.push(...reasoningYaml(fact.thinkingLevelMap, indent + 2));
+	// Optional per-model wire switches. Exactly one model needs one today:
+	// `claude-haiku-5-5`'s endpoint refuses `thinking.type.enabled` outright —
+	// `"thinking.type.enabled" is not supported for this model. Use
+	// "thinking.type.adaptive" and "output_config.effort"` — and pi-ai only
+	// dispatches the adaptive form when `forceAdaptiveThinking` is set.
+	if (fact.compat !== undefined) {
+		lines.push(`${pad}  compat:`);
+		for (const [field, value] of Object.entries(fact.compat)) lines.push(`${pad}    ${field}: ${value}`);
+	}
 	return lines.join('\n');
 }
 

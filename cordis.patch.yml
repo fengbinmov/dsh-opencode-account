@@ -32,7 +32,6 @@
         api: openai-completions
         baseURL: https://opencode.ai/zen/go/v1
         apiKeyEnv: OPENCODE_API_KEY
-        reasoning: high
         headers:
           x-opencode-session: 7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40
         models:
@@ -73,6 +72,28 @@
           input: ['text']
           reasoningEfforts:
             off:
+            high: high
+            max: max
+        - id: deepseek-v4.1-flash
+          name: DeepSeek V4.1 Flash
+          contextWindow: 1000000
+          maxTokens: 131072
+          input: ['text', 'image']
+          reasoningEfforts:
+            off:
+            low: low
+            high: high
+            max: max
+        - id: glm-5.1
+          name: GLM-5.1
+          contextWindow: 202752
+          maxTokens: 32768
+          input: ['text']
+          reasoningEfforts:
+            off:
+            minimal: minimal
+            low: low
+            medium: medium
             high: high
             max: max
         - id: glm-5.2
@@ -121,6 +142,19 @@
           reasoningEfforts:
             off: none
             high: high
+        - id: kimi-k2.6
+          name: Kimi K2.6
+          contextWindow: 262144
+          maxTokens: 65536
+          input: ['text', 'image']
+          reasoningEfforts:
+            off:
+            minimal: minimal
+            low: low
+            medium: medium
+            high: high
+            xhigh: xhigh
+            max: max
         - id: kimi-k2.7-code
           name: Kimi K2.7 Code
           contextWindow: 262144
@@ -140,6 +174,11 @@
           input: ['text', 'image']
           reasoningEfforts:
             off:
+            minimal: minimal
+            low: low
+            medium: medium
+            high: high
+            xhigh: xhigh
             max: max
         - id: longcat-2.0
           name: LongCat-2.0
@@ -213,6 +252,53 @@
             medium: medium
             high: high
             max: max
+        - id: minimax-m2.5
+          name: MiniMax-M2.5
+          contextWindow: 1000000
+          maxTokens: 131072
+          input: ['text']
+          reasoningEfforts:
+            off:
+            minimal: minimal
+            low: low
+            medium: medium
+            high: high
+            max: max
+        - id: omen-alpha
+          name: Omen Alpha
+          contextWindow: 262144
+          maxTokens: 65536
+          input: ['text']
+          reasoningEfforts:
+            off:
+            minimal: minimal
+            low: low
+            medium: medium
+            high: high
+            max: max
+        - id: qwen3.6-plus
+          name: Qwen3.6 Plus
+          contextWindow: 1000000
+          maxTokens: 65536
+          input: ['text', 'image']
+          reasoningEfforts:
+            off:
+            low: low
+            medium: medium
+            high: high
+            xhigh: xhigh
+        - id: qwen3.7-max
+          name: Qwen3.7 Max
+          contextWindow: 1000000
+          maxTokens: 65536
+          input: ['text']
+          reasoningEfforts:
+            off:
+            minimal: minimal
+            low: low
+            medium: medium
+            high: high
+            xhigh: xhigh
         - id: qwen3.7-plus
           name: Qwen3.7 Plus
           contextWindow: 1000000
@@ -232,13 +318,16 @@
           input: ['text', 'image']
           reasoningEfforts:
             off:
+            minimal: minimal
             low: low
             medium: medium
+            high: high
             xhigh: xhigh
-        - id: space-bunny-free
-          name: Space Bunny Free
-          contextWindow: 131072
-          maxTokens: 131072
+            max: max
+        - id: space-bunny
+          name: Space Bunny
+          contextWindow: 1048576
+          maxTokens: 524288
           input: ['text', 'image']
           reasoningEfforts:
             off:
@@ -247,12 +336,21 @@
             medium: medium
             high: high
             max: max
+        - id: step-5-preview-free
+          name: Step 5 Preview Free
+          contextWindow: 1000000
+          maxTokens: 65536
+          input: ['text', 'image']
+          reasoningEfforts:
+            off:
+            low: low
+            medium: medium
+            high: high
       opencode-go-responses:
         displayName: OpenCode Go (Responses)
         api: openai-responses
         baseURL: https://opencode.ai/zen/go/v1
         apiKeyEnv: OPENCODE_API_KEY
-        reasoning: high
         headers:
           x-opencode-session: 7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40
         models:
@@ -286,7 +384,8 @@
           maxTokens: 500000
           input: ['text', 'image']
           reasoningEfforts:
-            off:
+            off: minimal
+            minimal: minimal
             low: low
             medium: medium
             high: high
@@ -297,12 +396,12 @@
           maxTokens: 128000
           input: ['text', 'image']
           reasoningEfforts:
-            off:
+            off: minimal
             minimal: minimal
             low: low
             medium: medium
             high: high
-            max: max
+            xhigh: xhigh
         - id: muse-spark-1.2-contributor
           name: Muse Spark 1.2 Contributor
           contextWindow: 1048576
@@ -332,10 +431,23 @@
         api: anthropic-messages
         baseURL: https://opencode.ai/zen/go
         apiKeyEnv: OPENCODE_API_KEY
-        reasoning: high
         headers:
           x-opencode-session: 7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40
         models:
+        - id: claude-haiku-5-5
+          name: Claude Haiku 5.5
+          contextWindow: 1000000
+          maxTokens: 128000
+          input: ['text', 'image']
+          reasoningEfforts:
+            off:
+            low: low
+            medium: medium
+            high: high
+            xhigh: xhigh
+            max: max
+          compat:
+            forceAdaptiveThinking: true
         - id: minimax-m2.7
           name: MiniMax-M2.7
           contextWindow: 204800
@@ -370,31 +482,6 @@
             minimal: minimal
             low: low
             medium: medium
-            high: high
-            max: max
-      opencode-go-flash:
-        displayName: OpenCode Go (Flash)
-        api: openai-completions
-        baseURL: https://opencode.ai/zen/go/v1
-        apiKeyEnv: OPENCODE_API_KEY
-        compat:
-          supportsStore: false
-          supportsDeveloperRole: false
-          supportsStrictMode: true
-          maxTokensField: max_tokens
-          requiresReasoningContentOnAssistantMessages: true
-          thinkingFormat: deepseek
-        headers:
-          x-opencode-session: 7f3c1a92-5d84-4e6b-9c07-2ab5e13f8d40
-        models:
-        - id: deepseek-v4.1-flash
-          name: DeepSeek V4.1 Flash
-          contextWindow: 1000000
-          maxTokens: 131072
-          input: ['text', 'image']
-          reasoningEfforts:
-            off:
-            low: low
             high: high
             max: max
       # <<< generated
